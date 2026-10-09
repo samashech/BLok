@@ -1,0 +1,284 @@
+"""JSON-lines bridge between Quickshell, PipeWire and the local recognizer."""
+import array
+import json
+import math
+import os
+from pathlib import Path
+import queue
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+from hyprash.commands import StreamPlanner, parse
+from hyprash.decision import LayaDecision
+
+ROOT = Path(__file__).resolve().parent.parent
+DATA = Path(os.environ.get("HYPRASH_DATA", ROOT / "data"))
+MODEL = ROOT / "models/vosk-model-small-en-us-0.15"
+
+class Backend:
+    def __init__(self):
+        self.output_lock = threading.Lock()
+        self.events = queue.Queue()
+        self.recorder = None
+        self.generation = 0
+        self.listening = False
+        self.planner = StreamPlanner()
+        self.note = None
+        self.model = None
+        self.decisions = queue.Queue(maxsize=8)
+        self.decision_worker = None
+        self.pending = 0
+
+    def emit(self, **event):
+        with self.output_lock:
+            print(json.dumps(event), flush=True)
+
+    def status(self, state, message):
+        self.emit(type="status", state=state, message=message)
+
+    def stop(self):
+        self.listening = False
+        self.generation += 1
+        if self.recorder is not None:
+            self.recorder.terminate()
+            try:
+                self.recorder.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.recorder.kill()
+                self.recorder.wait()
+            self.recorder = None
+        self.planner = StreamPlanner()
+        self.pending = 0
+        self.emit(type="activity", state="idle")
+        self.emit(type="level", value=0)
+        self.status("ready", "Microphone off")
+
+    def listen(self):
+        if self.listening:
+            return
+        generation = self.generation
+        self.listening = True
+        self.status("loading", "Loading local speech recognition…")
+        threading.Thread(target=self.capture, args=(generation,), daemon=True).start()
+
+    def capture(self, generation):
+        process = None
+        try:
+            import vosk
+            vosk.SetLogLevel(-1)
+            if self.model is None:
+                self.model = vosk.Model(str(MODEL))
+            rec = vosk.KaldiRecognizer(self.model, 16000)
+            if generation != self.generation:
+                return
+            process = subprocess.Popen(
+                ["pw-record", "--raw", "--rate=16000", "--channels=1", "--format=s16", "-"],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            self.recorder = process
+            self.events.put((generation, {"type":"listening"}))
+            while generation == self.generation:
+                chunk = process.stdout.read(3200)
+                if not chunk:
+                    raise RuntimeError("Microphone unavailable. Check your PipeWire input device.")
+                samples = array.array("h", chunk)
+                rms = math.sqrt(sum(x*x for x in samples) / max(1, len(samples))) / 32768
+                final = rec.AcceptWaveform(chunk)
+                result = json.loads(rec.Result() if final else rec.PartialResult())
+                self.events.put((generation, {"type":"audio", "level":min(1, rms * 12),
+                    "text":result.get("text" if final else "partial", ""), "final":bool(final)}))
+        except Exception as error:
+            self.events.put((generation, {"type":"error", "message":str(error)}))
+        finally:
+            if process:
+                if process.poll() is None:
+                    process.terminate()
+                process.wait()
+
+    def run_command(self, args):
+        result = subprocess.run(args, capture_output=True, text=True, timeout=12)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip()[:180] or f"{args[0]} failed")
+
+    def publish_note(self, show=True):
+        DATA.joinpath("notes").mkdir(parents=True, exist_ok=True)
+        path = DATA / "notes" / (self.note["id"] + ".json")
+        temp = path.with_suffix(".tmp")
+        temp.write_text(json.dumps(self.note, ensure_ascii=False, indent=2))
+        temp.replace(path)
+        self.emit(type="note" if show else "note_saved", **self.note)
+
+    def ensure_note(self):
+        if self.note is None:
+            paths = sorted(DATA.glob("notes/*.json"), key=lambda p:p.stat().st_mtime, reverse=True)
+            if paths:
+                self.note = json.loads(paths[0].read_text())
+            else:
+                self.note = {"id": uuid.uuid4().hex, "title":"Untitled", "body":""}
+
+    def execute(self, action):
+        kind, value = action.kind, action.value
+        try:
+            if kind == "stop":
+                self.stop()
+                return
+            if kind == "open":
+                if value == "notes":
+                    self.ensure_note()
+                    self.publish_note()
+                elif value == "camera":
+                    self.emit(type="camera", capture=False)
+                else:
+                    commands = {"browser":["xdg-open", "https://www.google.com"],
+                        "terminal":["gtk-launch", "foot"], "files":["gtk-launch", "org.gnome.Nautilus"],
+                        "code":["gtk-launch", "code"]}
+                    self.run_command(commands[value])
+                message = f"Opened {value}" if value in ("notes", "camera") else f"Requested {value}"
+            elif kind == "url":
+                self.run_command(["xdg-open", value])
+                message = "Opened search" if "/search?q=" in value else "Opened " + value.removeprefix("https://")
+            elif kind in ("new_note", "title", "write"):
+                self.ensure_note()
+                if kind == "new_note":
+                    self.note = {"id":uuid.uuid4().hex, "title":value, "body":""}
+                elif kind == "title":
+                    self.note["title"] = value
+                else:
+                    self.note["body"] += ("\n" if self.note["body"] else "") + value
+                self.publish_note()
+                message = "Saved note · " + self.note["title"]
+            elif kind == "photo":
+                self.emit(type="camera", capture=True)
+                return
+            elif kind == "workspace":
+                self.run_command(["hyprctl", "dispatch", "workspace", value])
+                message = "Workspace " + value
+            else:
+                return
+            self.emit(type="action", message=message)
+        except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
+            self.emit(type="action", error=True, message=str(error))
+
+    def start_decisions(self):
+        if self.decision_worker is not None:
+            return
+        def work():
+            model = LayaDecision()
+            self.events.put((None, {"internal":"engine", "message":"Laya · loading locally"}))
+            try:
+                model.load()
+                self.events.put((None, {"internal":"engine", "message":"Laya · local CPU · offline"}))
+            except Exception as error:
+                self.events.put((None, {"internal":"engine", "message":"Laya unavailable: " + str(error)}))
+                # Requests will get an explicit error; there is no silent regex bypass.
+            while True:
+                generation, text = self.decisions.get()
+                if generation != self.generation: continue
+                try:
+                    decision = model.decide(text)
+                    self.events.put((generation, {"type":"decision", "decision":decision}))
+                except Exception as error:
+                    self.events.put((generation, {"type":"decision_error", "message":str(error)}))
+        self.decision_worker = threading.Thread(target=work, daemon=True)
+        self.decision_worker.start()
+
+    def submit_decision(self, text):
+        self.start_decisions()
+        try:
+            self.decisions.put_nowait((self.generation, text))
+        except queue.Full:
+            self.emit(type="action", error=True, message="Too many pending commands. Wait a moment or press Stop.")
+            return
+        self.pending += 1
+        self.emit(type="activity", state="thinking", message="Laya is deciding locally…")
+
+    def finish_decision(self, event):
+        self.pending = max(0, self.pending - 1)
+        if event["type"] == "decision_error":
+            self.emit(type="action", error=True, message="Laya couldn’t decide: " + event["message"])
+        else:
+            decision = event["decision"]
+            self.emit(type="decision", model="convaiinnovations/laya", intent=decision.intent,
+                      probability=decision.probability, elapsed_ms=decision.elapsed_ms)
+            if decision.action:
+                self.emit(type="activity", state="executing", message="Applying desktop action…")
+                self.execute(decision.action)
+            else:
+                self.emit(type="action", message=decision.reason)
+        self.emit(type="activity", state="thinking" if self.pending else "idle")
+
+    def transcript(self, text, final):
+        self.emit(type="transcript", text=text, final=final)
+        # Stop is an immediate control, so a slow/failed model can never trap the mic.
+        if text.strip().lower() == "stop listening":
+            self.stop()
+            return
+        normalized = text.lower().replace("dot com", ".com").replace("dot org", ".org")
+        normalized = re.sub(r"\s+\.", ".", normalized)
+        available = parse(normalized, final)
+        actions = self.planner.feed(normalized, final, time.monotonic())
+        for action in actions:
+            next_offsets = [a.offset for a in available if a.offset > action.offset]
+            end = min(next_offsets) if next_offsets else len(normalized)
+            clause = normalized[action.offset:end].strip()
+            clause = re.sub(r"\s+(?:and(?: then)?|then|can you|and can you)$", "", clause)
+            self.submit_decision(clause)
+        if final and text and not actions and not available:
+            self.submit_decision(text)
+
+    def request(self, request):
+        command = request.get("command")
+        if command == "listen": self.listen()
+        elif command == "stop": self.stop()
+        elif command == "text":
+            if self.listening: self.stop()
+            self.transcript(str(request.get("text", ""))[:4000], True)
+        elif command == "save_note" and self.note and request.get("id") == self.note["id"]:
+            self.note.update(title=str(request.get("title", "Untitled"))[:500], body=str(request.get("body", ""))[:100000])
+            self.publish_note(show=False)
+        elif command == "feedback":
+            self.emit(type="action", message=str(request.get("message", "")))
+
+    def main(self):
+        def read_requests():
+            for line in sys.stdin:
+                try: self.events.put((None, json.loads(line)))
+                except ValueError: pass
+            self.events.put((None, {"command":"quit"}))
+        threading.Thread(target=read_requests, daemon=True).start()
+        self.status("ready", "Ready when you are")
+        self.start_decisions()
+        try:
+            while True:
+                generation, event = self.events.get()
+                if generation is None:
+                    if event.get("internal") == "engine":
+                        self.emit(type="engine", message=event["message"])
+                        continue
+                    if event.get("command") == "quit": break
+                    try: self.request(event)
+                    except Exception as error: self.emit(type="action", error=True, message=str(error))
+                elif generation == self.generation:
+                    if event["type"] in ("decision", "decision_error"):
+                        self.finish_decision(event)
+                    elif event["type"] == "audio":
+                        self.emit(type="level", value=event["level"])
+                        self.transcript(event["text"], event["final"])
+                    elif event["type"] == "listening": self.status("listening", "Listening on this device")
+                    elif event["type"] == "error":
+                        self.stop()
+                        self.status("error", event["message"])
+        finally:
+            self.stop()
+
+if __name__ == "__main__":
+    backend = Backend()
+    def shutdown(*_):
+        backend.stop()
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, shutdown)
+    backend.main()
