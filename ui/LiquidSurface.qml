@@ -1,55 +1,123 @@
 import QtQuick
+import "LiquidMotion.js" as Motion
 
-// A single changing contour: camera bead → hanging drop → settled island.
-Canvas {
+// Native port: Libraries.dev's sampled springs + Gaussian/alpha goo merge.
+// Only the silhouette is filtered. The text/orb remain a separate crisp layer.
+Item {
     id: liquid
     property real reveal: 0
     property real targetWidth: 400
     property real targetHeight: 84
     property bool reducedMotion: false
+    property real cornerRadius: 29
+    property color backgroundTop: "#15171f"
+    property color background: "#0c0e14"
+    property color backgroundBottom: "#090b10"
     property color edge: "#434754"
     readonly property real p: Math.max(0, Math.min(1, reveal))
-    readonly property real spread: smooth(0.12, 0.94, p)
-    readonly property real bodyWidth: 8 + (targetWidth - 8) * spread + 12 * Math.sin(p * Math.PI) * Math.sin(p * Math.PI * 3)
-    readonly property real bodyHeight: 7 + (targetHeight - 7) * (1 - Math.pow(1-p, 2))
-    readonly property real bodyTop: 18 * smooth(0, 0.7, p)
-    readonly property real contentOpacity: smooth(0.7, 1, p)
-    function smooth(a, b, x) { let t = Math.max(0,Math.min(1,(x-a)/(b-a))); return t*t*(3-2*t) }
-    Behavior on reveal { NumberAnimation { duration: liquid.reducedMotion ? 0 : 680; easing.type: Easing.InOutCubic } }
-    Behavior on targetWidth { NumberAnimation { duration: liquid.reducedMotion ? 0 : 360; easing.type: Easing.OutCubic } }
-    Behavior on targetHeight { NumberAnimation { duration: liquid.reducedMotion ? 0 : 360; easing.type: Easing.OutCubic } }
-    onRevealChanged: requestPaint()
-    onTargetWidthChanged: requestPaint()
-    onTargetHeightChanged: requestPaint()
-    onEdgeChanged: requestPaint()
-    onPaint: {
-        let c = getContext("2d")
-        c.reset(); c.clearRect(0,0,width,height)
-        if (p < 0.001) return
-        let cx=width/2, w=Math.max(8,bodyWidth), h=bodyHeight, top=bodyTop
-        let l=cx-w/2, r=cx+w/2, bottom=top+h
-        let round=Math.min(h/2,w/2,29)
-        let tether=1-smooth(0.70,0.98,p)
-        let stem=2.6*tether, join=Math.min(w*0.23, 30)*tether
-        let sag=8*Math.sin(Math.PI*p)
-        c.globalAlpha = Math.min(1,p*9)
-        c.beginPath()
-        c.moveTo(cx-stem, top*(1-tether))
-        c.bezierCurveTo(cx-stem,top*0.78,cx-join*0.65,top,cx-join,top)
-        c.lineTo(l+round,top)
-        c.bezierCurveTo(l+round*0.3,top,l,top+round*0.3,l,top+round)
-        c.lineTo(l,bottom-round)
-        c.bezierCurveTo(l,bottom-round*0.3,l+round*0.3,bottom,l+round,bottom)
-        c.bezierCurveTo(cx-w*0.15,bottom+sag,cx+w*0.15,bottom+sag,r-round,bottom)
-        c.bezierCurveTo(r-round*0.3,bottom,r,bottom-round*0.3,r,bottom-round)
-        c.lineTo(r,top+round)
-        c.bezierCurveTo(r,top+round*0.3,r-round*0.3,top,r-round,top)
-        c.lineTo(cx+join,top)
-        c.bezierCurveTo(cx+join*0.65,top,cx+stem,top*0.78,cx+stem,top*(1-tether))
-        c.closePath()
-        let fill=c.createLinearGradient(0,0,0,bottom)
-        fill.addColorStop(0,"#15171f"); fill.addColorStop(0.5,"#0c0e14"); fill.addColorStop(1,"#090b10")
-        c.fillStyle=fill; c.fill()
-        c.strokeStyle=edge; c.lineWidth=1; c.stroke()
+    function segment(a,b) { return Math.max(0,Math.min(1,(p-a)/(b-a))) }
+    function smooth(a,b) { let t=segment(a,b); return t*t*(3-2*t) }
+    function spring(a,b,bounce) { return Motion.LiquidMotion.spring(segment(a,b),bounce) }
+    readonly property real opening: spring(0.28,0.90,true)
+    readonly property real bodyWidth: Math.max(16, 46+(targetWidth-46)*Math.min(1.025,opening))
+    readonly property real bodyHeight: 36+(targetHeight-36)*spring(0.14,0.78,false)
+    readonly property real bodyTop: 18 + 25*Math.sin(Math.PI*smooth(0.02,0.64))
+    readonly property real centerY: bodyTop+bodyHeight/2
+    readonly property real contentOpacity: smooth(0.77,0.99)
+    readonly property real deformation: Math.sin(Math.PI*p)
+    readonly property real gooSoftness: 0.45+8.5*(1-smooth(0.70,1))
+    readonly property real fluidRadius: Math.min(bodyWidth/2,bodyHeight/2, 40+(cornerRadius-40)*smooth(0.70,1))
+    Behavior on reveal { NumberAnimation { duration: liquid.reducedMotion ? 0 : 1150; easing.type: Easing.Linear } }
+    Behavior on targetWidth { NumberAnimation { duration: liquid.reducedMotion ? 0 : 480; easing.type: Easing.OutBack; easing.overshoot: 0.65 } }
+    Behavior on targetHeight { NumberAnimation { duration: liquid.reducedMotion ? 0 : 480; easing.type: Easing.OutBack; easing.overshoot: 0.65 } }
+
+    Item {
+        id: shapes
+        anchors.fill: parent
+        // The source at the camera and its descending droplet physically merge.
+        Rectangle {
+            x: (parent.width-width)/2; y: -12
+            width: 32*(1-liquid.smooth(0.42,0.72)); height: 30
+            radius: width/2; color: "white"
+            visible: liquid.p > 0 && width > 0.1
+        }
+        Rectangle {
+            width: 22*(1-liquid.smooth(0.48,0.74)); height: 42
+            x: (parent.width-width)/2
+            y: 3+17*liquid.smooth(0.03,0.28)
+            radius: width/2; color: "white"
+            visible: liquid.p > 0 && width > 0.1
+        }
+        Rectangle {
+            x: (parent.width-width)/2
+            y: liquid.bodyTop
+            width: liquid.bodyWidth; height: liquid.bodyHeight
+            radius: liquid.fluidRadius; color: "white"
+            scale: liquid.spring(0.0,0.22,false)
+            visible: liquid.p > 0
+        }
+        Repeater {
+            model: [-1,1]
+            Rectangle {
+                required property int modelData
+                property real flight: liquid.spring(0.22,0.78,true)
+                width: 54+10*liquid.deformation; height: 48+14*liquid.deformation
+                x: parent.width/2 + modelData*(liquid.targetWidth/2-30)*flight - width/2
+                y: liquid.centerY-height/2 + modelData*10*Math.sin(Math.PI*liquid.segment(0.25,0.8))
+                radius: height/2; color: "white"
+                scale: liquid.smooth(0.10,0.30)*(1-liquid.smooth(0.66,0.88))
+                visible: liquid.p>0 && liquid.p<0.9
+            }
+        }
     }
+    ShaderEffectSource {
+        id: raw
+        sourceItem: shapes
+        hideSource: true
+        visible: false
+        live: liquid.visible
+        textureSize: Qt.size(liquid.width,liquid.height)
+    }
+    ShaderEffect {
+        id: horizontal
+        anchors.fill: parent
+        property variant source: raw
+        property vector2d resolution: Qt.vector2d(width,height)
+        property real softness: liquid.gooSoftness
+        fragmentShader: Qt.resolvedUrl("shaders/goo-blur.frag.qsb")
+    }
+    ShaderEffectSource {
+        id: blurred
+        sourceItem: horizontal
+        hideSource: true
+        visible: false
+        live: liquid.visible
+        textureSize: Qt.size(liquid.width,liquid.height)
+    }
+    ShaderEffect {
+        anchors.fill: parent
+        visible: liquid.p>0
+        property variant source: blurred
+        property vector2d resolution: Qt.vector2d(width,height)
+        property real softness: liquid.gooSoftness
+        property color fillTop: liquid.backgroundTop
+        property color fillBottom: liquid.backgroundBottom
+        property color rim: liquid.edge
+        fragmentShader: Qt.resolvedUrl("shaders/goo-merge.frag.qsb")
+    }
+    // Resolve to exact theme geometry after the fluid silhouette settles.
+    Rectangle {
+        x: (parent.width-liquid.bodyWidth)/2
+        y: liquid.bodyTop
+        width: liquid.bodyWidth; height: liquid.bodyHeight
+        radius: liquid.cornerRadius
+        opacity: liquid.smooth(0.92,1)
+        gradient: Gradient {
+            GradientStop { position: 0; color: liquid.backgroundTop }
+            GradientStop { position: 1; color: liquid.backgroundBottom }
+        }
+        border.width: 1
+        border.color: liquid.edge
+    }
+
 }

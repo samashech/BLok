@@ -15,6 +15,6 @@ export function frame(state: OrbState, time: number) {
   const preset = resolvePreset(state, 64);
   return MODE_FRAMES[preset.mode](64, time * preset.speed, preset.opts);
 }
-export function draw(ctx: CanvasRenderingContext2D, state: OrbState, time: number) {
-  paintFrame(ctx, frame(state, time), true, { r: 223, g: 230, b: 255 });
+export function draw(ctx: CanvasRenderingContext2D, state: OrbState, time: number, tint = { r: 223, g: 230, b: 255 }, dark = true) {
+  paintFrame(ctx, frame(state, time), dark, tint);
 }

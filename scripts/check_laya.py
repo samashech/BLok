@@ -7,6 +7,12 @@ agent=LayaDecision()
 agent.load()
 cases=[
  ('open browser',('open','browser')),
+ ('Go to the address bar.',('address','')),
+ ('Type weather in Delhi.',('browser_type','weather in delhi')),
+ ('Press enter.',('browser_key','enter')),
+ ('New tab.',('browser_key','new tab')),
+ ('Go back.',('browser_key','back')),
+ ('Look up rock and roll.',('url','https://www.google.com/search?q=rock+and+roll')),
  ('Can you bring up my terminal?',('open','terminal')),
  ('open notes',('open','notes')),
  ('create a note titled hello',('new_note','hello')),

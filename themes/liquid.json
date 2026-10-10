@@ -1,0 +1,8 @@
+{
+  "id": "liquid", "name": "Liquid", "followDesktop": false,
+  "radius": 29, "controlRadius": 16, "font": "sans-serif", "mode": "dark",
+  "background": "#0c0e14", "backgroundTop": "#15171f", "backgroundBottom": "#090b10",
+  "foreground": "#f0f2f7", "muted": "#979cac", "accent": "#b6a0ff",
+  "border": "#434754", "surface": "#24262f", "hover": "#343641",
+  "success": "#bcdec4", "error": "#e8aaa5", "orb": "#dfe6ff"
+}

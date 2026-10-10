@@ -5,10 +5,11 @@ import Quickshell
 
 FloatingWindow {
     id: notes
+    required property var theme
     title: "Hyprash · Notes"
     visible: false
     implicitWidth: 660; implicitHeight: 480
-    color: "#191920"
+    color: theme.background
     property string noteId: ""
     property bool loading: false
     signal saveRequested(string id, string title, string body)
@@ -24,25 +25,25 @@ FloatingWindow {
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 32; spacing: 18
         RowLayout {
-            Text { text: "✦  NOTES"; color: "#b6a0ff"; font.pixelSize: 12; font.letterSpacing: 2 }
+            Text { text: "✦  NOTES"; color: theme.accent; font.family: theme.font; font.pixelSize: 12; font.letterSpacing: 2 }
             Item { Layout.fillWidth: true }
-            Text { text: "Stored on this device"; color: "#9b9aa9"; font.pixelSize: 11 }
+            Text { text: "Stored on this device"; color: theme.muted; font.family: theme.font; font.pixelSize: 11 }
             Button { text: "Close"; onClicked: notes.visible = false }
         }
         TextField {
             id: titleField
             Layout.fillWidth: true
-            color: "#f1f0f5"; font.pixelSize: 30; font.weight: Font.DemiBold
+            color: theme.foreground; font.family: theme.font; font.pixelSize: 30; font.weight: Font.DemiBold
             placeholderText: "Untitled"; background: Item {}
             onTextEdited: notes.changed()
         }
-        Rectangle { Layout.fillWidth: true; height: 1; color: "#36333f" }
+        Rectangle { Layout.fillWidth: true; height: 1; color: theme.border }
         ScrollView {
             Layout.fillHeight: true; Layout.fillWidth: true
             TextArea {
                 id: bodyField
-                color: "#dfdde7"; font.pixelSize: 16; wrapMode: TextEdit.Wrap
-                placeholderText: "Start writing, or say ‘write …’"; placeholderTextColor: "#757181"
+                color: theme.foreground; font.family: theme.font; font.pixelSize: 16; wrapMode: TextEdit.Wrap
+                placeholderText: "Start writing, or say ‘write …’"; placeholderTextColor: theme.muted
                 background: Item {}
                 onTextChanged: notes.changed()
             }

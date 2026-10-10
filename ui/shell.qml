@@ -25,19 +25,26 @@ ShellRoot {
     property bool reducedMotion: Quickshell.env("HYPRASH_REDUCED_MOTION") === "1"
     property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError
     property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? (activity === "executing" ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
-    property string headline: engine.indexOf("loading") !== -1 ? "Loading Laya…" : state === "error" ? "Needs attention" : busy ? (activity === "executing" ? "On it." : "Thinking…") : state === "loading" ? "Getting ready…" : listening ? "I’m listening." : "Ready to listen."
-    property color ink: "#f1f0f5"
-    property color muted: "#9b9aa9"
-    property color accent: "#b6a0ff"
+    property string headline: engine.indexOf("loading") !== -1 ? "Loading Laya…" : state === "error" ? "Needs attention" : busy ? (activity === "executing" ? "On it." : activity === "transcribing" ? "Transcribing…" : "Thinking…") : state === "loading" ? "Getting ready…" : listening ? "I’m listening." : "Ready to listen."
+    property var theme: ({
+  "id": "omarchy", "name": "Omarchy", "followDesktop": true,
+  "radius": 2, "controlRadius": 2, "font": "Adwaita Mono", "mode": "dark",
+  "background": "#090704", "backgroundTop": "#090704", "backgroundBottom": "#090704",
+  "foreground": "#DCB39B", "muted": "#a58674", "accent": "#a4735b",
+  "border": "#725f4d", "surface": "#22201d", "hover": "#302e29",
+  "success": "#dcbf87", "error": "#cea275", "orb": "#e5c6b4"
+})
 
     function send(data) { backend.write(JSON.stringify(data) + "\n") }
     function toggleMic() {
         if (!backend.running) { state = "error"; message = "Backend unavailable. Restart Hyprash."; return }
-        if (listening || busy) send({command: "stop"})
+        if (listening) send({command: "finish"})
+        else if (busy) send({command: "stop"})
         else { transcript = ""; lastAction = ""; send({command: "listen"}) }
     }
     function hide() { send({command: "stop"}); opened = false; typing = false }
     function handle(event) {
+        if (event.type === "theme") theme = event.theme
         if (event.type === "activity") { activity = event.state; busy = activity !== "idle"; activityMessage = event.message || "" }
         if (event.type === "engine") engine = event.message
         if (event.type === "decision") inferenceMs = event.elapsed_ms
@@ -61,13 +68,14 @@ ShellRoot {
     IpcHandler {
         target: "hyprash"
         function toggle(): void {
-            if (root.opened && (root.listening || root.busy)) root.hide()
+            if (root.opened && (root.listening || root.busy)) root.toggleMic()
             else { root.opened = true; if (!root.listening) root.toggleMic() }
         }
         function present(): void { root.opened = true }
         function hide(): void { root.hide() }
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }
-        function status(): string { return JSON.stringify({state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs}) }
+        function appearance(name: string): void { root.send({command: "theme", name: name}) }
+        function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs}) }
         function quit(): void { root.send({command: "stop"}); Qt.quit() }
     }
     PanelWindow {
@@ -93,10 +101,14 @@ ShellRoot {
         LiquidSurface {
             id: surface
             anchors.fill: parent
-            targetWidth: Math.min(root.expanded ? 448 : 388, panel.width - 24)
+            targetWidth: Math.min(root.expanded ? 472 : 436, panel.width - 24)
             targetHeight: root.typing ? 190 : root.expanded ? 142 : 84
             reducedMotion: root.reducedMotion
-            edge: root.actionError ? "#735251" : root.busy ? "#666174" : "#434754"
+            edge: root.actionError ? root.theme.error : root.busy ? root.theme.accent : root.theme.border
+            cornerRadius: root.theme.radius
+            backgroundTop: root.theme.backgroundTop
+            background: root.theme.background
+            backgroundBottom: root.theme.backgroundBottom
             Component.onCompleted: reveal = root.opened ? 1 : 0
             Connections {
                 target: root
@@ -119,6 +131,8 @@ ShellRoot {
                     ThinkingOrb {
                         id: orb
                         Layout.preferredWidth: 64; Layout.preferredHeight: 64
+                        tint: root.theme.orb
+                        dark: root.theme.mode !== "light"
                         mode: root.orbMode
                         active: panel.visible && surface.reveal > 0.65
                         audioLevel: root.level
@@ -129,44 +143,52 @@ ShellRoot {
                         Layout.fillWidth: true; spacing: 4
                         RowLayout {
                             spacing: 6
-                            Rectangle { width: 4; height: 4; radius: 2; color: root.listening ? "#bcdec4" : "#707584" }
-                            Text { text: "HYPRASH  /  LAYA"; color: "#9196a8"; font.pixelSize: 9; font.letterSpacing: 1.4 }
+                            Rectangle { width: 4; height: 4; radius: 2; color: root.listening ? root.theme.success : root.theme.muted }
+                            Text { text: "HYPRASH  /  LAYA"; color: root.theme.muted; font.family: root.theme.font; font.pixelSize: 9; font.letterSpacing: 1.4 }
                         }
                         Text {
                             Layout.fillWidth: true
                             text: root.headline
-                            color: "#f0f2f7"; font.pixelSize: 17; font.weight: Font.Medium
+                            color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: root.theme.id === "omarchy" ? 15 : 17; font.weight: Font.Medium
                             elide: Text.ElideRight
                         }
                     }
                     ToolButton {
-                        text: root.typing ? "⌨" : "Aa"; font.pixelSize: 12
+                        text: "▦"; font.pixelSize: 16
+                        implicitWidth: 24; implicitHeight: 28; leftPadding: 0; rightPadding: 0
+                        palette.buttonText: root.theme.accent
+                        ToolTip.visible: root.opened && surface.reveal > 0.99 && (hovered)
+                        ToolTip.text: "Theme: " + root.theme.name + ". Click for " + (root.theme.id === "omarchy" ? "Liquid" : "Omarchy")
+                        onClicked: root.send({command: "theme", name: root.theme.id === "omarchy" ? "liquid" : "omarchy"})
+                    }
+                    ToolButton {
+                        text: root.typing ? "⌨" : "Aa"; font.family: root.theme.font; font.pixelSize: 12
                         implicitWidth: 25; implicitHeight: 28; leftPadding: 0; rightPadding: 0
-                        palette.buttonText: "#979cac"
-                        ToolTip.visible: hovered; ToolTip.text: "Type a command"
+                        palette.buttonText: root.theme.muted
+                        ToolTip.visible: root.opened && surface.reveal > 0.99 && (hovered); ToolTip.text: "Type a command"
                         onClicked: { root.typing = !root.typing; if (root.typing) input.forceActiveFocus() }
                     }
                     Rectangle {
-                        Layout.preferredWidth: 32; Layout.preferredHeight: 32; radius: 16
-                        color: micMouse.containsMouse ? "#343641" : "#24262f"
-                        border.color: "#454853"
+                        Layout.preferredWidth: 32; Layout.preferredHeight: 32; radius: root.theme.controlRadius
+                        color: micMouse.containsMouse ? root.theme.hover : root.theme.surface
+                        border.color: root.theme.border
                         Rectangle {
                             anchors.centerIn: parent
                             width: root.listening || root.busy ? 9 : 7
                             height: root.listening || root.busy ? 9 : 12
                             radius: root.listening || root.busy ? 2 : 4
-                            color: root.listening ? "#d6e7da" : "#d4d8e6"
+                            color: root.listening ? root.theme.success : root.theme.foreground
                         }
                         Accessible.role: Accessible.Button
-                        Accessible.name: root.listening || root.busy ? "Stop listening and cancel pending actions" : "Start listening"
+                        Accessible.name: root.listening ? "Finish recording and run command" : root.busy ? "Cancel pending actions" : "Start Voxtype recording"
                         MouseArea { id: micMouse; anchors.fill: parent; hoverEnabled: true; onClicked: root.toggleMic() }
-                        ToolTip.visible: micMouse.containsMouse
-                        ToolTip.text: root.listening || root.busy ? "Stop · Super+Shift+J" : "Listen · Super+Shift+J"
+                        ToolTip.visible: root.opened && surface.reveal > 0.99 && (micMouse.containsMouse)
+                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Super+Shift+J" : "Cancel") : "Record with Voxtype · Super+Shift+J"
                     }
                     ToolButton {
-                        text: "×"; font.pixelSize: 19; implicitWidth: 20; implicitHeight: 28; leftPadding: 0; rightPadding: 0
-                        palette.buttonText: "#8c91a1"
-                        ToolTip.visible: hovered; ToolTip.text: "Hide and turn microphone off"
+                        text: "×"; font.family: root.theme.font; font.pixelSize: 19; implicitWidth: 20; implicitHeight: 28; leftPadding: 0; rightPadding: 0
+                        palette.buttonText: root.theme.muted
+                        ToolTip.visible: root.opened && surface.reveal > 0.99 && (hovered); ToolTip.text: "Hide and turn microphone off"
                         onClicked: root.hide()
                     }
                 }
@@ -174,27 +196,27 @@ ShellRoot {
                     visible: root.expanded
                     Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 8
                     Layout.preferredHeight: 38
-                    text: root.transcript || (root.listening ? "Say what you’d like to do…" : root.message)
-                    color: "#b9bfce"; font.pixelSize: 13
+                    text: root.transcript || (root.listening ? "Speak, then click mic to run · Voxtype" : root.message)
+                    color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: 13
                     wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                 }
                 Text {
                     visible: root.expanded
                     Layout.fillWidth: true; Layout.leftMargin: 12
                     text: root.lastAction || (root.busy ? root.activityMessage : root.message)
-                    color: root.actionError ? "#e8aaa5" : "#737c91"
-                    font.pixelSize: 10; elide: Text.ElideRight
-                    ToolTip.visible: actionHover.hovered; ToolTip.text: text
+                    color: root.actionError ? root.theme.error : root.theme.muted
+                    font.family: root.theme.font; font.pixelSize: 10; elide: Text.ElideRight
+                    ToolTip.visible: root.opened && surface.reveal > 0.99 && (actionHover.hovered); ToolTip.text: text
                     HoverHandler { id: actionHover }
                 }
                 TextField {
                     id: input
                     visible: root.typing; Layout.fillWidth: true; Layout.topMargin: 6
                     placeholderText: "Ask your desktop…"
-                    color: "#e8ebf5"; placeholderTextColor: "#6d7489"
-                    background: Rectangle { color: "#181a23"; radius: 10; border.color: "#343847" }
+                    color: root.theme.foreground; placeholderTextColor: root.theme.muted
+                    background: Rectangle { color: root.theme.surface; radius: root.theme.controlRadius; border.color: root.theme.border }
                     onAccepted: {
-                        if (text.trim()) { root.send({command: "text", text: text}); text = "" }
+                        if (text.trim()) { root.typing = false; root.send({command: "text", text: text}); text = "" }
                     }
                     Keys.onEscapePressed: root.hide()
                 }
@@ -203,10 +225,12 @@ ShellRoot {
     }
     Notes {
         id: notes
+        theme: root.theme
         onSaveRequested: (id, title, body) => root.send({command: "save_note", id: id, title: title, body: body})
     }
     CameraWindow {
         id: camera
+        theme: root.theme
         onFeedback: message => { root.lastAction = message; root.actionError = false }
     }
 }

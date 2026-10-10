@@ -6,9 +6,10 @@ import Quickshell
 
 FloatingWindow {
     id: window
+    required property var theme
     title: "Hyprash · Camera"
     implicitWidth: 720; implicitHeight: 500
-    color: "#191920"; visible: false
+    color: theme.background; visible: false
     signal feedback(string message)
     property bool pendingPhoto: false
     property string status: devices.videoInputs.length ? "Camera off" : "No camera connected"
@@ -47,18 +48,18 @@ FloatingWindow {
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 20; spacing: 14
         RowLayout {
-            Text { text: "✦  CAMERA"; color: "#b6a0ff"; font.pixelSize: 12; font.letterSpacing: 2 }
+            Text { text: "✦  CAMERA"; color: theme.accent; font.family: theme.font; font.pixelSize: 12; font.letterSpacing: 2 }
             Item { Layout.fillWidth: true }
             Button { text: "Close"; onClicked: window.visible = false }
         }
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
-            color: "#101014"; radius: 14
+            color: theme.backgroundBottom; radius: theme.radius
             VideoOutput { id: preview; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectFit }
-            Text { anchors.centerIn: parent; visible: !camera.active; text: window.status; color: "#b7b1c4" }
+            Text { anchors.centerIn: parent; visible: !camera.active; text: window.status; color: theme.foreground }
         }
         RowLayout {
-            Text { Layout.fillWidth: true; text: window.status; color: "#9b9aa9"; font.pixelSize: 11; elide: Text.ElideMiddle }
+            Text { Layout.fillWidth: true; text: window.status; color: theme.muted; font.family: theme.font; font.pixelSize: 11; elide: Text.ElideMiddle }
             Button { text: window.pendingPhoto ? "Get ready…" : "Take photo"; enabled: capture.readyForCapture && !window.pendingPhoto; onClicked: window.takePhoto() }
         }
     }

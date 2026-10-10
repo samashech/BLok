@@ -1,7 +1,5 @@
-"""JSON-lines bridge between Quickshell, PipeWire and the local recognizer."""
-import array
+"""JSON-lines bridge between Quickshell, Voxtype and local Laya decisions."""
 import json
-import math
 import os
 from pathlib import Path
 import queue
@@ -14,25 +12,26 @@ import time
 import uuid
 
 from hyprash.commands import StreamPlanner, parse
+from hyprash import browser
 from hyprash.decision import LayaDecision
+from hyprash.themes import ThemeStore
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("HYPRASH_DATA", ROOT / "data"))
-MODEL = ROOT / "models/vosk-model-small-en-us-0.15"
 
 class Backend:
     def __init__(self):
         self.output_lock = threading.Lock()
         self.events = queue.Queue()
-        self.recorder = None
         self.generation = 0
         self.listening = False
         self.planner = StreamPlanner()
         self.note = None
-        self.model = None
+        self.voice = None
         self.decisions = queue.Queue(maxsize=8)
         self.decision_worker = None
         self.pending = 0
+        self.themes = ThemeStore(DATA)
 
     def emit(self, **event):
         with self.output_lock:
@@ -44,14 +43,14 @@ class Backend:
     def stop(self):
         self.listening = False
         self.generation += 1
-        if self.recorder is not None:
-            self.recorder.terminate()
+        if self.voice is not None:
+            voice, self.voice = self.voice, None
             try:
-                self.recorder.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.recorder.kill()
-                self.recorder.wait()
-            self.recorder = None
+                voice.cancel()
+            except Exception as error:
+                self.voice = voice
+                self.status("error", "Voxtype cancel: " + str(error))
+                return
         self.planner = StreamPlanner()
         self.pending = 0
         self.emit(type="activity", state="idle")
@@ -61,43 +60,52 @@ class Backend:
     def listen(self):
         if self.listening:
             return
+        from hyprash.speech import VoxtypeSession
+        self.stop()
         generation = self.generation
-        self.listening = True
-        self.status("loading", "Loading local speech recognition…")
-        threading.Thread(target=self.capture, args=(generation,), daemon=True).start()
-
-    def capture(self, generation):
-        process = None
+        voice = VoxtypeSession()
         try:
-            import vosk
-            vosk.SetLogLevel(-1)
-            if self.model is None:
-                self.model = vosk.Model(str(MODEL))
-            rec = vosk.KaldiRecognizer(self.model, 16000)
-            if generation != self.generation:
-                return
-            process = subprocess.Popen(
-                ["pw-record", "--raw", "--rate=16000", "--channels=1", "--format=s16", "-"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            self.recorder = process
-            self.events.put((generation, {"type":"listening"}))
-            while generation == self.generation:
-                chunk = process.stdout.read(3200)
-                if not chunk:
-                    raise RuntimeError("Microphone unavailable. Check your PipeWire input device.")
-                samples = array.array("h", chunk)
-                rms = math.sqrt(sum(x*x for x in samples) / max(1, len(samples))) / 32768
-                final = rec.AcceptWaveform(chunk)
-                result = json.loads(rec.Result() if final else rec.PartialResult())
-                self.events.put((generation, {"type":"audio", "level":min(1, rms * 12),
-                    "text":result.get("text" if final else "partial", ""), "final":bool(final)}))
-        except Exception as error:
-            self.events.put((generation, {"type":"error", "message":str(error)}))
-        finally:
-            if process:
-                if process.poll() is None:
-                    process.terminate()
-                process.wait()
+            voice.start()
+        except Exception:
+            voice.close()
+            raise
+        self.voice = voice
+        self.listening = True
+        self.status("listening", "Voxtype · " + voice.model + " · click mic again to finish")
+        def watch():
+            try:
+                started = time.monotonic()
+                seen_busy = False
+                while generation == self.generation:
+                    state = voice.state()
+                    if state == "transcribing" and not seen_busy:
+                        seen_busy = True
+                        self.events.put((generation, {"type":"speech_busy"}))
+                    if state == "idle":
+                        # State and output are separate writes; tolerate their ordering.
+                        for _ in range(10):
+                            if voice.path.exists():
+                                break
+                            time.sleep(.05)
+                        text = voice.path.read_text().strip() if voice.path.exists() else ""
+                        voice.owned = False
+                        self.events.put((generation, {"type":"speech_text", "text":text}))
+                        return
+                    if state == "stopped" or time.monotonic()-started > 180:
+                        raise RuntimeError("Voxtype stopped or timed out")
+                    time.sleep(.1)
+            except Exception as error:
+                self.events.put((generation, {"type":"error", "message":str(error)}))
+            finally:
+                voice.close()
+        threading.Thread(target=watch, daemon=True).start()
+
+    def finish_recording(self):
+        if self.voice is not None:
+            self.voice.finish()
+            self.listening = False
+            self.status("processing", "Transcribing with your Voxtype model…")
+            self.emit(type="activity", state="transcribing", message="Voxtype is transcribing locally…")
 
     def run_command(self, args):
         result = subprocess.run(args, capture_output=True, text=True, timeout=12)
@@ -126,7 +134,10 @@ class Backend:
             if kind == "stop":
                 self.stop()
                 return
-            if kind == "open":
+            if kind in ("address", "browser_type", "browser_key"):
+                browser.control(kind, value)
+                message = {"address":"Address bar ready", "browser_type":"Typed in address bar", "browser_key":"Browser: " + value}[kind]
+            elif kind == "open":
                 if value == "notes":
                     self.ensure_note()
                     self.publish_note()
@@ -155,7 +166,7 @@ class Backend:
                 self.emit(type="camera", capture=True)
                 return
             elif kind == "workspace":
-                self.run_command(["hyprctl", "dispatch", "workspace", value])
+                self.run_command(["hyprctl", "dispatch", f'hl.dsp.focus({{workspace="{value}"}})'])
                 message = "Workspace " + value
             else:
                 return
@@ -213,8 +224,10 @@ class Backend:
 
     def transcript(self, text, final):
         self.emit(type="transcript", text=text, final=final)
+        if not final:
+            return
         # Stop is an immediate control, so a slow/failed model can never trap the mic.
-        if text.strip().lower() == "stop listening":
+        if text.strip().lower().strip(" .!?,") == "stop listening":
             self.stop()
             return
         normalized = text.lower().replace("dot com", ".com").replace("dot org", ".org")
@@ -234,12 +247,16 @@ class Backend:
         command = request.get("command")
         if command == "listen": self.listen()
         elif command == "stop": self.stop()
+        elif command == "finish": self.finish_recording()
         elif command == "text":
-            if self.listening: self.stop()
+            if self.listening or self.voice is not None: self.stop()
             self.transcript(str(request.get("text", ""))[:4000], True)
         elif command == "save_note" and self.note and request.get("id") == self.note["id"]:
             self.note.update(title=str(request.get("title", "Untitled"))[:500], body=str(request.get("body", ""))[:100000])
             self.publish_note(show=False)
+        elif command == "theme":
+            self.themes.select(str(request.get("name", "")))
+            self.emit(type="theme", theme=self.themes.current())
         elif command == "feedback":
             self.emit(type="action", message=str(request.get("message", "")))
 
@@ -252,9 +269,17 @@ class Backend:
         threading.Thread(target=read_requests, daemon=True).start()
         self.status("ready", "Ready when you are")
         self.start_decisions()
+        next_theme = 0.0
         try:
             while True:
-                generation, event = self.events.get()
+                if time.monotonic() >= next_theme:
+                    theme = self.themes.changed()
+                    if theme: self.emit(type="theme", theme=theme)
+                    next_theme = time.monotonic() + 2
+                try:
+                    generation, event = self.events.get(timeout=2)
+                except queue.Empty:
+                    continue
                 if generation is None:
                     if event.get("internal") == "engine":
                         self.emit(type="engine", message=event["message"])
@@ -265,10 +290,19 @@ class Backend:
                 elif generation == self.generation:
                     if event["type"] in ("decision", "decision_error"):
                         self.finish_decision(event)
-                    elif event["type"] == "audio":
-                        self.emit(type="level", value=event["level"])
-                        self.transcript(event["text"], event["final"])
-                    elif event["type"] == "listening": self.status("listening", "Listening on this device")
+                    elif event["type"] == "speech_busy":
+                        self.listening = False
+                        self.status("processing", "Transcribing with your Voxtype model…")
+                        self.emit(type="activity", state="transcribing", message="Voxtype is transcribing locally…")
+                    elif event["type"] == "speech_text":
+                        self.voice = None
+                        self.listening = False
+                        self.status("ready", "Microphone off")
+                        self.emit(type="activity", state="idle")
+                        if event["text"]:
+                            self.transcript(event["text"], True)
+                        else:
+                            self.emit(type="action", error=True, message="No speech received from Voxtype. Try recording again.")
                     elif event["type"] == "error":
                         self.stop()
                         self.status("error", event["message"])

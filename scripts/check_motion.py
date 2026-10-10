@@ -13,18 +13,24 @@ monitor=next((m for m in monitors if m.get('focused')),monitors[0])
 width=int(monitor['width']/monitor['scale'])
 x=monitor['x']+(width-500)//2
 y=monitor['y']
-call('hide'); time.sleep(.8)
+call('hide'); time.sleep(1.3)
 print('Show result:',repr(call('show')),flush=True); start=time.monotonic()
 print('After show:',call('status'),flush=True)
-for i,at in enumerate([.07,.16,.25,.37,.52,.8]):
+for i,at in enumerate([.10,.25,.40,.60,.85,1.25]):
     time.sleep(max(0,at-(time.monotonic()-start)))
     subprocess.run(['grim','-g',f'{x},{y} 500x250',str(OUT/f'{i:02}.png')],check=True)
     print('frame',i,round(time.monotonic()-start,3),call('status'),flush=True)
 status=json.loads(call('status'))
 assert status['reveal']==1,status
-call('hide'); time.sleep(.9)
+call('hide'); time.sleep(1.3)
 status=json.loads(call('status'))
 assert status['reveal']==0,status
 assert status['message']=='Microphone off',status
-call('show')
-print('PASS: opening frames captured; closing returns to zero and mic is off')
+# Reverse an unfinished transition in both directions.
+call('show'); time.sleep(.3)
+call('hide'); time.sleep(.2)
+call('show'); time.sleep(1.3)
+status=json.loads(call('status'))
+assert status['reveal']==1,status
+assert status['message']=='Microphone off',status
+print('PASS: opening frames captured; closing and interrupted transitions complete; mic is off')

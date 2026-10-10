@@ -1,0 +1,8 @@
+{
+  "id": "omarchy", "name": "Omarchy", "followDesktop": true,
+  "radius": 2, "controlRadius": 2, "font": "Adwaita Mono", "mode": "dark",
+  "background": "#090704", "backgroundTop": "#090704", "backgroundBottom": "#090704",
+  "foreground": "#DCB39B", "muted": "#a58674", "accent": "#a4735b",
+  "border": "#725f4d", "surface": "#22201d", "hover": "#302e29",
+  "success": "#dcbf87", "error": "#cea275", "orb": "#e5c6b4"
+}

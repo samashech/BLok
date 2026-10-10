@@ -905,8 +905,8 @@ var ThinkingOrbs = (() => {
     const preset = resolvePreset(state, 64);
     return MODE_FRAMES[preset.mode](64, time * preset.speed, preset.opts);
   }
-  function draw(ctx, state, time) {
-    paintFrame(ctx, frame(state, time), true, { r: 223, g: 230, b: 255 });
+  function draw(ctx, state, time, tint = { r: 223, g: 230, b: 255 }, dark = true) {
+    paintFrame(ctx, frame(state, time), dark, tint);
   }
   return __toCommonJS(native_exports);
 })();

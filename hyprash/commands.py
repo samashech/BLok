@@ -20,7 +20,7 @@ SITES = {"youtube": "https://www.youtube.com", "github": "https://github.com",
          "google": "https://www.google.com", "x": "https://x.com",
          "twitter": "https://x.com"}
 START = re.compile(
-    r"\b(?:open(?: up)?|launch|go to|visit|search(?: (?:the web|google))? for|"
+    r"\b(?:(?:go to|focus|click(?: on)?|select|open)(?: the)? (?:address|url|search) bar|type|press enter|hit enter|new tab|go back|go forward|reload(?: the page)?|look up|look online for|find online|open(?: up)?|launch|go to|visit|search(?: (?:the web|google))? for|"
     r"search|google|(?:create|make)(?: a)?(?: new)? note|new note|"
     r"(?:set|make|change)(?: the| its)? title(?: to| say)?|title(?: it)?|call it|"
     r"(?:write|add)(?: down)?|take(?: a)? (?:picture|photo|selfie)(?: of me)?|"
@@ -47,10 +47,15 @@ def parse(text, final=True):
         verb = match.group().lower()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         arg = clean(text[match.end():end])
-        arg = re.sub(r"\s+(?:and(?: then)?|then|and once.*|once.*|can you|and can you).*$", "", arg).strip()
         closed = final or i + 1 < len(matches)
         action = None
-        if verb == "stop listening":
+        if verb.endswith(" bar"):
+            action = Action("address")
+        elif verb == "type" and closed and arg:
+            action = Action("browser_type", arg)
+        elif verb in ("press enter", "hit enter", "new tab", "go back", "go forward", "reload", "reload the page"):
+            action = Action("browser_key", {"press enter":"enter", "hit enter":"enter", "go back":"back", "go forward":"forward", "reload the page":"reload"}.get(verb, verb))
+        elif verb == "stop listening":
             action = Action("stop")
         elif "workspace" in verb and closed:
             number = {"one":"1", "two":"2", "three":"3", "four":"4", "five":"5", "six":"6", "seven":"7", "eight":"8", "nine":"9", "ten":"10"}.get(arg, arg)
@@ -65,7 +70,7 @@ def parse(text, final=True):
                 action = Action("url", SITES[target])
             elif closed and re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}(?:/[^\s]*)?", target):
                 action = Action("url", "https://" + target)
-        elif verb.startswith(("search", "google")) and closed and arg:
+        elif verb.startswith(("search", "google", "look up", "look online for", "find online")) and closed and arg:
             action = Action("url", "https://www.google.com/search?q=" + quote_plus(arg))
         elif "note" in verb and closed:
             title = re.sub(r"^(?:called|titled|named|saying|that says) ", "", arg)

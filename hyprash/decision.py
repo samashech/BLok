@@ -72,6 +72,9 @@ class LayaDecision:
         if len(parsed) == 1:
             proposed = parsed[0]
             labels = {
+                "address": "Focus the browser address bar",
+                "browser_type": "Type " + proposed.value + " in the browser address bar",
+                "browser_key": "Browser: " + proposed.value,
                 "open": "Open " + proposed.value,
                 "new_note": "Create a new note titled " + proposed.value,
                 "title": "Change the note title to " + proposed.value,
