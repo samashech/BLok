@@ -7,6 +7,8 @@ agent=LayaDecision()
 agent.load()
 cases=[
  ('open browser',('open','browser')),
+ ('open hyprash notes',('open','hyprash_notes')),
+ ('open hyprash camera',('open','hyprash_camera')),
  ('Go to the address bar.',('address','')),
  ('Type weather in Delhi.',('browser_type','weather in delhi')),
  ('Press enter.',('browser_key','enter')),

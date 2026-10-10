@@ -80,9 +80,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(len(list(Path(self.temp.name).glob('notes/*.json'))),1)
 
     def test_launch_uses_argument_list_and_reports_failure(self):
-        with patch.object(self.backend,'run_command',side_effect=RuntimeError('launch failed')) as run:
+        with patch('hyprash.browser.request',side_effect=RuntimeError('launch failed')) as run:
             self.backend.execute(Action('url','https://google.com/search?q=hello'))
-        run.assert_called_once_with(['xdg-open','https://google.com/search?q=hello'])
+        run.assert_called_once_with({'action':'navigate','url':'https://google.com/search?q=hello'})
         self.assertTrue(self.events[-1]['error'])
 
     def test_stale_editor_save_cannot_overwrite_new_note(self):

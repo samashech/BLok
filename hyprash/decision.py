@@ -1,5 +1,6 @@
 """Local Laya selects intents; Python validates the bounded action arguments."""
 import os
+import json
 import math
 import re
 import time
@@ -75,7 +76,7 @@ class LayaDecision:
                 "address": "Focus the browser address bar",
                 "browser_type": "Type " + proposed.value + " in the browser address bar",
                 "browser_key": "Browser: " + proposed.value,
-                "open": "Open " + proposed.value,
+                "open": "Open " + proposed.value.replace("_", " "),
                 "new_note": "Create a new note titled " + proposed.value,
                 "title": "Change the note title to " + proposed.value,
                 "write": "Write " + proposed.value,
@@ -84,7 +85,15 @@ class LayaDecision:
                 "stop": "Stop listening",
                 "url": ("Search the web" if "/search?q=" in proposed.value else "Open the website " + proposed.value.removeprefix("https://")),
             }
-            label = labels[proposed.kind]
+            if proposed.kind in ('web_task','ui_control'):
+                task=json.loads(proposed.value)
+                label=("Play " + task['query'] + " on Spotify" if task['action']=='play' else
+                       "Search " + task.get('site','the current site') + " for " + task.get('query','') if task['action']=='search' else
+                       "Open search result " + str(task['index']) if task['action']=='result' else
+                       "Click " + task.get('target','') if task['action']=='click' else
+                       "Fill the " + task.get('target','') + " field with " + task.get('text',''))
+            else:
+                label = labels[proposed.kind]
             # Explicit alternative prevents opening Notes from becoming a new note.
             criteria = {label:"", "Do nothing":""}
             choice, probability, margin = self.choose(text, criteria, "Choose the action requested by the user.")

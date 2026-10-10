@@ -12,7 +12,7 @@ import time
 import uuid
 
 from hyprash.commands import StreamPlanner, parse
-from hyprash import browser
+from hyprash import browser, desktop
 from hyprash.decision import LayaDecision
 from hyprash.themes import ThemeStore
 
@@ -27,6 +27,13 @@ class Backend:
         self.listening = False
         self.planner = StreamPlanner()
         self.note = None
+        self.notes_target = "hyprash"
+        self.camera_target = "hyprash"
+        self.external_note_title = None
+        self.action_jobs = queue.Queue()
+        self.action_worker = None
+        self.actions_pending = 0
+        self.worker_context = threading.local()
         self.voice = None
         self.decisions = queue.Queue(maxsize=8)
         self.decision_worker = None
@@ -34,6 +41,9 @@ class Backend:
         self.themes = ThemeStore(DATA)
 
     def emit(self, **event):
+        generation=getattr(self.worker_context,"generation",None)
+        if generation is not None and generation != self.generation:
+            return
         with self.output_lock:
             print(json.dumps(event), flush=True)
 
@@ -43,6 +53,9 @@ class Backend:
     def stop(self):
         self.listening = False
         self.generation += 1
+        if self.actions_pending:
+            browser.cancel()
+        self.actions_pending = 0
         if self.voice is not None:
             voice, self.voice = self.voice, None
             try:
@@ -128,31 +141,80 @@ class Backend:
             else:
                 self.note = {"id": uuid.uuid4().hex, "title":"Untitled", "body":""}
 
+    def enqueue_action(self, action):
+        if self.action_worker is None:
+            def work():
+                while True:
+                    generation, action = self.action_jobs.get()
+                    if generation != self.generation: continue
+                    self.worker_context.generation = generation
+                    try:
+                        self.execute(action)
+                    except Exception as error:
+                        self.emit(type="action", error=True, message=str(error))
+                    self.events.put((generation, {"type":"action_done"}))
+            self.action_worker=threading.Thread(target=work,daemon=True)
+            self.action_worker.start()
+        self.actions_pending += 1
+        self.action_jobs.put((self.generation,action))
+
     def execute(self, action):
         kind, value = action.kind, action.value
         try:
             if kind == "stop":
                 self.stop()
                 return
-            if kind in ("address", "browser_type", "browser_key"):
+            if kind == "web_task":
+                message=browser.request(json.loads(value))['message']
+            elif kind == "ui_control":
+                task=json.loads(value)
+                active=json.loads(browser.run(['hyprctl','-j','activewindow']))
+                if active.get('title') in ('Hyprash · Notes','Hyprash · Camera'):
+                    self.emit(type="ui_control", window=active['title'], **task)
+                    return
+                message=desktop.control(task)['message']
+            elif kind in ("address", "browser_type", "browser_key"):
                 browser.control(kind, value)
                 message = {"address":"Address bar ready", "browser_type":"Typed in address bar", "browser_key":"Browser: " + value}[kind]
             elif kind == "open":
-                if value == "notes":
-                    self.ensure_note()
-                    self.publish_note()
-                elif value == "camera":
-                    self.emit(type="camera", capture=False)
+                if value in ("notes","obsidian","hyprash_notes"):
+                    if value != "hyprash_notes" and desktop.launch("notes"):
+                        self.notes_target = "obsidian"
+                    else:
+                        self.notes_target = "hyprash"
+                        self.ensure_note()
+                        self.publish_note()
+                elif value in ("camera","snapshot","hyprash_camera"):
+                    if value != "hyprash_camera" and desktop.launch("camera"):
+                        self.camera_target = "desktop"
+                    else:
+                        self.camera_target = "hyprash"
+                        self.emit(type="camera", capture=False)
                 else:
                     commands = {"browser":["xdg-open", "https://www.google.com"],
                         "terminal":["gtk-launch", "foot"], "files":["gtk-launch", "org.gnome.Nautilus"],
                         "code":["gtk-launch", "code"]}
-                    self.run_command(commands[value])
+                    if value in commands:self.run_command(commands[value])
+                    elif not desktop.launch(value):raise RuntimeError("No installed app named " + value)
                 message = f"Opened {value}" if value in ("notes", "camera") else f"Requested {value}"
             elif kind == "url":
-                self.run_command(["xdg-open", value])
-                message = "Opened search" if "/search?q=" in value else "Opened " + value.removeprefix("https://")
+                from urllib.parse import urlparse, parse_qs
+                url=urlparse(value)
+                task=({'action':'search','query':parse_qs(url.query)['q'][0]} if url.hostname=='www.google.com' and url.path=='/search' and 'q' in parse_qs(url.query)
+                      else {'action':'navigate','url':value})
+                message=browser.request(task)['message']
             elif kind in ("new_note", "title", "write"):
+                if self.notes_target == "obsidian":
+                    if kind == "title":
+                        message=desktop.control({'action':'fill','target':'Note title','text':value})['message']
+                        self.external_note_title=value
+                    else:
+                        if kind == "new_note":self.external_note_title=value
+                        if not self.external_note_title:raise RuntimeError('Create a named note first, or select a field and dictate into it.')
+                        desktop.new_obsidian_note(self.external_note_title,value if kind=='write' else '',append=kind=='write')
+                        message='Saved Obsidian note · '+self.external_note_title
+                    self.emit(type="action",message=message)
+                    return
                 self.ensure_note()
                 if kind == "new_note":
                     self.note = {"id":uuid.uuid4().hex, "title":value, "body":""}
@@ -163,8 +225,11 @@ class Backend:
                 self.publish_note()
                 message = "Saved note · " + self.note["title"]
             elif kind == "photo":
-                self.emit(type="camera", capture=True)
-                return
+                if self.camera_target == "desktop":
+                    message=desktop.control({'action':'click','target':'Take Picture'})['message']
+                else:
+                    self.emit(type="camera", capture=True)
+                    return
             elif kind == "workspace":
                 self.run_command(["hyprctl", "dispatch", f'hl.dsp.focus({{workspace="{value}"}})'])
                 message = "Workspace " + value
@@ -217,10 +282,10 @@ class Backend:
                       probability=decision.probability, elapsed_ms=decision.elapsed_ms)
             if decision.action:
                 self.emit(type="activity", state="executing", message="Applying desktop action…")
-                self.execute(decision.action)
+                self.enqueue_action(decision.action)
             else:
                 self.emit(type="action", message=decision.reason)
-        self.emit(type="activity", state="thinking" if self.pending else "idle")
+        self.emit(type="activity", state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
 
     def transcript(self, text, final):
         self.emit(type="transcript", text=text, final=final)
@@ -290,6 +355,9 @@ class Backend:
                 elif generation == self.generation:
                     if event["type"] in ("decision", "decision_error"):
                         self.finish_decision(event)
+                    elif event["type"] == "action_done":
+                        self.actions_pending=max(0,self.actions_pending-1)
+                        self.emit(type="activity",state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
                     elif event["type"] == "speech_busy":
                         self.listening = False
                         self.status("processing", "Transcribing with your Voxtype model…")

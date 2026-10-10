@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Hyprash browser control",
+  "version": "0.1.0",
+  "description": "Local voice control of your existing tabs. No cloud service.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp5vVLjnW3ANdxWwLCuOwxXlJC3XfFrVIo/jSThc3WUcexAzz9HCuSuV/vulzdNERHJmmO/LU4Q0Mz1Bbdi9CgYqhqlM/s9Cg6qFb7auO7zzVQdef/Zn59CSa9o6EbeZPkjWJTP0Ea2TRW3Ay8WvWN2kwWKDKjN3jn3HZDGk7e2vwTWVOdnDMQPW6Q+vyjkTg3XlEJ8W6Gh/YnXq8cQyOSw8eGdfM5Srk9lKfPrlZ6rFVvxFgarb9KZE3xiTFu3ki+WSQK8u8na275jkp16a6wZDxriasm1hUe0Nd/0A92DW1GqW0zAuXr/0BbiOa8wCyI7Ra7E2x7Y+76VPUbo2OyQIDAQAB",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Hyprash browser connection"
+  }
+}

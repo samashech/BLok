@@ -52,6 +52,7 @@ ShellRoot {
         if (event.type === "level") level = event.value
         if (event.type === "transcript" && event.text) transcript = event.text
         if (event.type === "action") { lastAction = event.message; actionError = !!event.error }
+        if (event.type === "ui_control") { let result = event.window === "Hyprash · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)
         if (event.type === "camera") { camera.visible = true; if (event.capture) camera.takePhoto() }
     }
@@ -71,6 +72,8 @@ ShellRoot {
             if (root.opened && (root.listening || root.busy)) root.toggleMic()
             else { root.opened = true; if (!root.listening) root.toggleMic() }
         }
+        function beginRecording(): void { root.opened = true; root.typing = false; root.transcript = ""; root.lastAction = ""; root.send({command: "listen"}) }
+        function finishRecording(): void { root.send({command: "finish"}) }
         function present(): void { root.opened = true }
         function hide(): void { root.hide() }
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }

@@ -19,6 +19,8 @@ case "${1:-show}" in
     echo 'Hyprash did not become ready; run ./hyprash.sh foreground for details.' >&2
     exit 1
     ;;
+  ptt-start) exec python3 scripts/ptt.py start ;;
+  ptt-finish) exec python3 scripts/ptt.py finish ;;
   foreground) exec quickshell -n -p "$HYPRASH_ROOT/ui" ;;
   hide|quit|status) quickshell ipc -p "$HYPRASH_ROOT/ui" call hyprash "$1" ;;
   theme) quickshell ipc -p "$HYPRASH_ROOT/ui" call hyprash appearance "${2:?Choose omarchy or liquid}" ;;

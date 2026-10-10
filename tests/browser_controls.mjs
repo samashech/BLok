@@ -1,0 +1,33 @@
+import {chromium} from '/home/samashech/Documents/Pixco/node_modules/playwright/index.mjs';
+import {readFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const {pageAction}=await import('data:text/javascript;base64,'+Buffer.from(await readFile(new URL('../browser-extension/page.js',import.meta.url))).toString('base64'));
+const browser=await chromium.launch({executablePath:'/usr/bin/brave-origin',headless:true,args:['--no-sandbox']});
+try{
+ const page=await browser.newPage();
+ await page.route('https://www.google.com/**',r=>r.fulfill({contentType:'text/html',body:`<form action="/search"><textarea name="q"></textarea><button type="submit">Google Search</button></form><div id="tads"><a href="https://example.com/ad"><h3>Sponsored first</h3></a></div><div id="search"><a href="https://example.com/normal"><h3>Normal second</h3></a></div>`}));
+ await page.route('https://example.com/**',r=>r.fulfill({contentType:'text/html',body:'<h1>Selected result</h1>'}));
+ await page.goto('https://www.google.com');
+ await page.evaluate(pageAction,{op:'search',site:'google',query:'rock and roll'});
+ await page.waitForURL('**/search?q=rock+and+roll');
+ await page.evaluate(pageAction,{op:'result',index:1});
+ await page.waitForURL('https://example.com/ad');
+ console.log('PASS: Google field submission and first sponsored result');
+ await page.route('https://www.youtube.com/**',r=>r.fulfill({contentType:'text/html',body:'<form action="/results"><input name="search_query"><button class="ytSearchboxComponentSearchButton">Search</button></form>'}));
+ await page.goto('https://www.youtube.com');
+ await page.evaluate(pageAction,{op:'search',site:'youtube',query:'bbs'});
+ await page.waitForURL('**/results?search_query=bbs');
+ console.log('PASS: YouTube search stays on YouTube');
+ await page.setContent('<label>Name<input></label><button onclick="this.textContent=\'Done\'">Save</button>');
+ await page.evaluate(pageAction,{op:'fill',target:'Name',text:'hello'});
+ assert.equal(await page.locator('input').inputValue(),'hello');
+ await page.evaluate(pageAction,{op:'click',target:'Save'});
+ assert.equal(await page.locator('button').textContent(),'Done');
+ await page.setContent('<button>Save</button><button>Save</button>');
+ await assert.rejects(page.evaluate(pageAction,{op:'click',target:'Save'}),/More than one/);
+ console.log('PASS: named controls, field verification and ambiguous match rejection');
+ await page.setContent(`<div data-testid="tracklist-row"><a href="/track/1">God's Plan</a><button aria-label="Play God's Plan" onclick="document.querySelector('#transport').setAttribute('aria-label','Pause')">Play</button></div><button id="transport" data-testid="control-button-playpause" aria-label="Play"></button><a data-testid="context-item-link">God's Plan</a>`);
+ await page.evaluate(pageAction,{op:'play',query:"God's Plan"});
+ assert.equal((await page.evaluate(pageAction,{op:'playing',query:"God's Plan"})).playing,true);
+ console.log('PASS: matching Spotify track activation and playback-state check');
+}finally{await browser.close();}

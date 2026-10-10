@@ -43,3 +43,24 @@ def control(kind, value=''):
                      'back': ['-M', 'alt', '-k', 'Left', '-m', 'alt'],
                      'forward': ['-M', 'alt', '-k', 'Right', '-m', 'alt'], 'reload': ['-k', 'F5']}
         run(['wtype', *shortcuts[value]])
+
+
+def request(payload, timeout=48):
+    import os
+    import socket
+    from pathlib import Path
+    path=Path(os.environ.get('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'))/'hyprash-browser.sock'
+    try:
+        with socket.socket(socket.AF_UNIX) as sock:
+            sock.settimeout(timeout)
+            sock.connect(str(path))
+            sock.sendall(json.dumps(payload).encode()+b'\n')
+            response=json.loads(sock.makefile('rb').readline(1024*1024))
+    except (OSError,ValueError) as error:
+        raise RuntimeError('Brave control is disconnected. Enable the Hyprash browser extension in brave://extensions.') from error
+    if response.get('error'):raise RuntimeError(response['error'])
+    return response.get('result',{})
+
+def cancel():
+    try: request({'action':'cancel'},timeout=1)
+    except RuntimeError: pass

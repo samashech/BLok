@@ -2,6 +2,8 @@
 from dataclasses import dataclass
 import re
 from urllib.parse import quote_plus
+from hyprash.workflows import workflow
+from hyprash.desktop import catalog
 
 @dataclass(frozen=True)
 class Action:
@@ -14,10 +16,12 @@ APPS = {
     "terminal": "terminal", "files": "files", "file manager": "files",
     "code": "code", "visual studio code": "code", "vs code": "code",
     "notes": "notes", "notes app": "notes", "note app": "notes",
+    "hyprash notes": "hyprash_notes", "hyprash camera": "hyprash_camera",
+    "obsidian": "obsidian", "snapshot": "snapshot",
     "camera": "camera", "photo booth": "camera", "photobooth": "camera",
 }
 SITES = {"youtube": "https://www.youtube.com", "github": "https://github.com",
-         "google": "https://www.google.com", "x": "https://x.com",
+         "google": "https://www.google.com", "spotify": "https://open.spotify.com", "x": "https://x.com",
          "twitter": "https://x.com"}
 START = re.compile(
     r"\b(?:(?:go to|focus|click(?: on)?|select|open)(?: the)? (?:address|url|search) bar|type|press enter|hit enter|new tab|go back|go forward|reload(?: the page)?|look up|look online for|find online|open(?: up)?|launch|go to|visit|search(?: (?:the web|google))? for|"
@@ -36,6 +40,9 @@ def parse(text, final=True):
     # Never reinterpret negated or quoted requests as affirmative commands.
     if re.search(r"\b(?:don't|do not|never|cancel|actually|instead)\b", text):
         return []
+    complete=workflow(text) if final else None
+    if complete:
+        return [Action(*complete)]
     matches = []
     for candidate in START.finditer(text):
         # Command words inside dictated content ("write open source software")
@@ -49,7 +56,10 @@ def parse(text, final=True):
         arg = clean(text[match.end():end])
         closed = final or i + 1 < len(matches)
         action = None
-        if verb.endswith(" bar"):
+        if verb.endswith("search bar"):
+            import json
+            action = Action("ui_control", json.dumps({'action':'click','target':'Search'}))
+        elif verb.endswith(" bar"):
             action = Action("address")
         elif verb == "type" and closed and arg:
             action = Action("browser_type", arg)
@@ -68,6 +78,8 @@ def parse(text, final=True):
                 action = Action("open", APPS[target])
             elif target in SITES:
                 action = Action("url", SITES[target])
+            elif target in catalog():
+                action = Action("open", target)
             elif closed and re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}(?:/[^\s]*)?", target):
                 action = Action("url", "https://" + target)
         elif verb.startswith(("search", "google", "look up", "look online for", "find online")) and closed and arg:

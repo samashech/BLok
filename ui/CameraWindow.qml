@@ -18,6 +18,12 @@ FloatingWindow {
         if (visible && devices.videoInputs.length) camera.start()
         else { camera.stop(); pendingPhoto = false; shutter.stop() }
     }
+    function control(task) {
+        let target=task.target.toLowerCase().replace(/ (button)$/, "")
+        if (task.action === "click" && target === "close") { visible = false; return "Closed Camera" }
+        if (task.action === "click" && ["take photo", "take picture", "shutter"].indexOf(target) !== -1) { takePhoto(); return "Preparing photo" }
+        return "No Camera control named " + task.target
+    }
     function takePhoto() {
         if (!devices.videoInputs.length) { status = "No camera connected"; feedback(status); return }
         pendingPhoto = true; status = "Getting ready…"; shutter.restart()

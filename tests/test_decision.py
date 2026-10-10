@@ -42,6 +42,7 @@ class QueueTests(unittest.TestCase):
         self.b.emit=Mock()
         self.b.submit_decision=Mock()
         self.b.execute=Mock()
+        self.b.enqueue_action=Mock()
 
     def test_stop_bypasses_slow_model_and_invalidates_pending(self):
         self.b.pending=3
@@ -66,7 +67,7 @@ class QueueTests(unittest.TestCase):
     def test_model_result_executes_only_accepted_action(self):
         self.b.pending=1
         self.b.finish_decision({'type':'decision','decision':Decision(Action('open','notes'),'open',0.9,123)})
-        self.b.execute.assert_called_once_with(Action('open','notes'))
+        self.b.enqueue_action.assert_called_once_with(Action('open','notes'))
         self.assertEqual(self.b.pending,0)
 
     def test_typed_request_stops_concurrent_voice_turn(self):
