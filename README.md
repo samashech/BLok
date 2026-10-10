@@ -1,4 +1,4 @@
-# Hyprash
+# BLok
 
 A native, local voice assistant for Arch Linux + Hyprland/Omarchy. It uses **your existing Voxtype daemon/model for speech recognition** and **Laya for desktop action decisions**. It has never used Jev or a hosted inference API.
 
