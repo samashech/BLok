@@ -186,7 +186,7 @@ ShellRoot {
                         Accessible.name: root.listening ? "Finish recording and run command" : root.busy ? "Cancel pending actions" : "Start Voxtype recording"
                         MouseArea { id: micMouse; anchors.fill: parent; hoverEnabled: true; onClicked: root.toggleMic() }
                         ToolTip.visible: root.opened && surface.reveal > 0.99 && (micMouse.containsMouse)
-                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Super+Shift+J" : "Cancel") : "Record with Voxtype · Super+Shift+J"
+                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Ctrl+." : "Cancel") : "Record with Voxtype · Ctrl+."
                     }
                     ToolButton {
                         text: "×"; font.family: root.theme.font; font.pixelSize: 19; implicitWidth: 20; implicitHeight: 28; leftPadding: 0; rightPadding: 0

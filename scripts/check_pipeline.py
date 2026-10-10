@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='hyprash-pipeline-') as data:
         raise AssertionError('Timed out waiting for event')
     try:
         wait(lambda e: e.get('type')=='engine' and 'offline' in e.get('message',''))
-        send('text',text='open notes and create a note titled hello')
+        send('text',text='open hyprash notes and create a note titled hello')
         note=wait(lambda e: e.get('type')=='note' and e.get('title')=='hello')
         wait(lambda e: e.get('type')=='activity' and e.get('state')=='idle')
         send('text',text='write this is a local note')

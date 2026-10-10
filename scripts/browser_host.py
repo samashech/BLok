@@ -41,7 +41,7 @@ def client(conn):
     try:
         conn.settimeout(50)
         request=json.loads(conn.makefile('rb').readline(16384))
-        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill'}:raise ValueError('Unsupported action')
+        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill','new_tab','sequence','github_repo'}:raise ValueError('Unsupported action')
         request['id']=key;pending[key]=queue.Queue()
         payload=json.dumps(request).encode()
         with write_lock:

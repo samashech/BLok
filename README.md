@@ -6,15 +6,20 @@ The top-center surface emerges from the webcam position as a small connected dro
 
 ## Use
 
-Press **Super+Shift+J** to open and listen; press again to finish recording, transcribe, and execute. You can also launch **Hyprash** from the application launcher or run `./hyprash.sh`. Click the mic control to start/finish recording, **Aa** to type, and **×** to retract. Closing the panel cancels recording and pending actions. A spoken **stop listening** command cancels after transcription. Typing a command stops a simultaneous microphone session so the two inputs cannot duplicate one another.
+Hold **Ctrl+.** to speak; release to transcribe and execute. Normal **F9** Voxtype dictation stays unchanged. You can also launch **Hyprash** from the application launcher or run `./hyprash.sh`. Click the mic control to start/finish recording, **Aa** to type, and **×** to retract. Closing the panel cancels recording and pending actions. A spoken **stop listening** command cancels after transcription. Typing a command stops a simultaneous microphone session so the two inputs cannot duplicate one another.
 
 Try:
 
 1. “Open notes and create a new note and make the title say hello.”
 2. “Write this is my first local voice note.”
-3. “Open browser and search for Robin Williams.”
-4. “Open x dot com.”
-5. “Open camera.” Then: “Take a picture of me.”
+3. “Open youtube.com and search for bbs.”
+4. “Open the first link that showed up.”
+5. “Google search games.”
+6. “Open Spotify and play God’s Plan.”
+7. “Open x dot com.”
+8. “Open camera.” Then: “Take a picture of me.”
+
+Named controls: “click the Search button”, “click the search bar”, “type bbs into Search”, or “click Close”. Matching uses visible labels; ambiguous matches ask for a fuller label. Password fields require direct typing.
 
 Browser controls: “Go to the address bar”, “type weather in Delhi”, “press enter”, “new tab”, “go back”, “go forward”, “reload the page”. You can combine them: “Go to the address bar and type weather in Delhi and press enter”. Searches accept “search for”, “look up”, and “look online for”; queries keep words such as “and”.
 
@@ -52,7 +57,11 @@ The original checkout has its environment and local Laya model prepared. On anot
 - Install `quickshell`, `qt6-multimedia`, `voxtype`, `wtype`, and `uv`. Configure and start Voxtype with a local model.
 - Run `./scripts/setup.sh`. This installs CPU PyTorch and Laya and downloads the ~805 MB Laya checkpoint. Speech reuses your existing Voxtype model; it downloads no additional speech model.
 - Run `./hyprash.sh`.
-- Optional: `python3 scripts/install.py` installs the launcher and **Super+Shift+J**, checking conflicts, backing up `bindings.lua`, and validating Hyprland after reload. It adds no autostart service.
+- Optional: `python3 scripts/install.py` installs the launcher and **Ctrl+.** hold/release, checking conflicts, backing up `bindings.lua`, and validating Hyprland after reload. It adds no autostart service.
+
+For Brave Origin, open `brave://extensions`, enable Developer mode, choose **Load unpacked**, and select this checkout's `browser-extension` directory. Run the installer first to register the local native-messaging host. After extension code changes, click its reload control. The extension uses your existing tabs and sign-ins; it does not launch a separate browser profile.
+
+Permissions: HTTP/HTTPS page access lets it locate named controls on sites you ask it to use; tabs/scripting operate those tabs, native messaging connects to Hyprash, and storage/alarms preserve cancellation state and reconnect after disconnection. No page content is sent to an inference service. The private local Unix socket accepts only the supported action types. Keep the extension enabled for browser actions.
 
 The installer requires Omarchy's Lua config layout. App launch targets match this machine: default browser, Foot, Nautilus and VS Code. Keep this checkout in place while the launcher refers to it.
 
@@ -62,11 +71,14 @@ Uninstall integration: `python3 scripts/install.py --uninstall`. Quit: `./hypras
 
 ## Data and limits
 
-- Notes are editable and stored in `data/notes/*.json`; `HYPRASH_DATA` can override that directory before launch. Opening Notes restores the latest note; older note files remain on disk.
-- Photos use a camera preview and preparation delay; Qt saves them to the system Pictures location and shows the exact path.
+- “Open notes” prefers installed Obsidian with a valid vault (otherwise uses Hyprash Notes); “open camera” prefers GNOME Camera. “Open Hyprash notes” and “open Hyprash camera” select the built-in windows explicitly. Other installed apps can be opened by their desktop-launcher names.
+- Built-in notes are editable and stored in `data/notes/*.json`; `HYPRASH_DATA` can override that directory before launch. Opening Notes restores the latest note; older note files remain on disk.
+- Built-in photos use a camera preview and preparation delay; Qt saves them to the system Pictures location and shows the exact path.
 - Voxtype owns microphone capture and transcription. Hyprash uses its per-recording file-output override in a private runtime directory, reads the completed transcript, and removes the temporary directory. It does not change normal F9 dictation or use the clipboard. This setup reports local Whisper `base.en`; future Voxtype model changes are reused.
 - Opening websites and searches uses your normal browser and the internet.
-- This is a bounded desktop command assistant, not a general chatbot or arbitrary computer-use agent. It cannot read webpages or control arbitrary application interfaces. Recognition accuracy is the same as your Voxtype setup; typed input is available.
+- Browser search workflows cover Google, YouTube and Spotify; first-result selection includes recognized sponsored result cards. Spotify reports success only when its player identifies the requested song as playing. Consent dialogs, account restrictions, changed site layouts and ambiguous labels can block actions.
+- Desktop named controls require the app to expose AT-SPI accessibility. Camera exposes its shutter and modes on this machine. Obsidian note creation/append uses its URI interface and requires one selected vault; duplicate new-note titles are rejected. Some apps expose no usable controls and will report that limitation.
+- This is a bounded command assistant, not a general chatbot or unrestricted computer-use agent. Recognition accuracy is the same as your Voxtype setup; typed input is available.
 - The reveal originates at the top center of the screen, aligned to a centered laptop webcam; it cannot originate physically inside the bezel. No macOS notch is added.
 
 ## Verification and development
@@ -75,6 +87,8 @@ Uninstall integration: `python3 scripts/install.py --uninstall`. Quit: `./hypras
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python scripts/check_laya.py     # real model, offline; no desktop effects
 .venv/bin/python scripts/check_pipeline.py # real model → persisted notes; cancellation
+node tests/browser_controls.mjs           # isolated browser DOM fixtures (Playwright)
+.venv/bin/python scripts/check_browser_bridge.py # native messaging bridge
 node --test tests/test_orbs.mjs            # all 9 original animation states
 .venv/bin/python scripts/check_live.py     # real Voxtype recording/cancellation
 .venv/bin/python scripts/check_voxtype.py --browser # real browser address-bar check
@@ -82,6 +96,8 @@ python3 scripts/check_motion.py           # captures small top-center screenshot
 ./hyprash.sh foreground
 ./hyprash.sh text 'create a note titled hello'
 ```
+
+Live browser checks are opt-in: `scripts/check_browser_live.py` navigates your actual tabs; passing `spotify` starts playback. `scripts/check_desktop_live.py` opens installed apps and inspects controls.
 
 The real-model command suite includes the demo sequence, natural app phrasing, unsupported requests and negation. The tests are focused checks, not a general accuracy benchmark.
 

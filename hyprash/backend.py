@@ -166,6 +166,11 @@ class Backend:
                 return
             if kind == "web_task":
                 message=browser.request(json.loads(value))['message']
+            elif kind == "obsidian_note":
+                title=desktop.create_obsidian_note(json.loads(value)['content'])
+                self.notes_target="obsidian"
+                self.external_note_title=title
+                message="Saved Obsidian note · "+title
             elif kind == "ui_control":
                 task=json.loads(value)
                 active=json.loads(browser.run(['hyprctl','-j','activewindow']))
@@ -174,11 +179,12 @@ class Backend:
                     return
                 message=desktop.control(task)['message']
             elif kind in ("address", "browser_type", "browser_key"):
-                browser.control(kind, value)
+                if kind=="browser_key" and value=="new tab":browser.request({'action':'new_tab'})
+                else:browser.control(kind, value)
                 message = {"address":"Address bar ready", "browser_type":"Typed in address bar", "browser_key":"Browser: " + value}[kind]
             elif kind == "open":
                 if value in ("notes","obsidian","hyprash_notes"):
-                    if value != "hyprash_notes" and desktop.launch("notes"):
+                    if value != "hyprash_notes" and desktop.launch("obsidian" if value=="obsidian" else "notes"):
                         self.notes_target = "obsidian"
                     else:
                         self.notes_target = "hyprash"
@@ -197,6 +203,9 @@ class Backend:
                     if value in commands:self.run_command(commands[value])
                     elif not desktop.launch(value):raise RuntimeError("No installed app named " + value)
                 message = f"Opened {value}" if value in ("notes", "camera") else f"Requested {value}"
+                if value=="notes" and self.notes_target=="hyprash":
+                    message="Opened Hyprash Notes · Obsidian needs a valid vault"
+                if value=="obsidian" and self.notes_target=="obsidian":message="Opened Obsidian"
             elif kind == "url":
                 from urllib.parse import urlparse, parse_qs
                 url=urlparse(value)
@@ -209,9 +218,10 @@ class Backend:
                         message=desktop.control({'action':'fill','target':'Note title','text':value})['message']
                         self.external_note_title=value
                     else:
-                        if kind == "new_note":self.external_note_title=value
-                        if not self.external_note_title:raise RuntimeError('Create a named note first, or select a field and dictate into it.')
-                        desktop.new_obsidian_note(self.external_note_title,value if kind=='write' else '',append=kind=='write')
+                        title=value if kind=='new_note' else self.external_note_title
+                        if not title:raise RuntimeError('Create a named note first, or select a field and dictate into it.')
+                        desktop.new_obsidian_note(title,value if kind=='write' else '',append=kind=='write')
+                        self.external_note_title=title
                         message='Saved Obsidian note · '+self.external_note_title
                     self.emit(type="action",message=message)
                     return

@@ -9,6 +9,7 @@ from urllib.parse import quote_plus
 from dataclasses import dataclass
 
 from hyprash.commands import Action, parse
+from hyprash.workflows import task_label
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_ID = "convaiinnovations/laya"
@@ -87,11 +88,9 @@ class LayaDecision:
             }
             if proposed.kind in ('web_task','ui_control'):
                 task=json.loads(proposed.value)
-                label=("Play " + task['query'] + " on Spotify" if task['action']=='play' else
-                       "Search " + task.get('site','the current site') + " for " + task.get('query','') if task['action']=='search' else
-                       "Open search result " + str(task['index']) if task['action']=='result' else
-                       "Click " + task.get('target','') if task['action']=='click' else
-                       "Fill the " + task.get('target','') + " field with " + task.get('text',''))
+                label=task_label(task)
+            elif proposed.kind=='obsidian_note':
+                label='Create a note saying '+json.loads(proposed.value)['content']+' in Obsidian'
             else:
                 label = labels[proposed.kind]
             # Explicit alternative prevents opening Notes from becoming a new note.

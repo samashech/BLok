@@ -46,6 +46,10 @@ def main():
         raise SystemExit('Config validation failed; restored original bindings.\n'+errors)
     if uninstall:
         desktop.unlink(missing_ok=True)
+        for profile in ['Brave-Origin','Brave-Browser']:
+            host=Path.home()/'.config/BraveSoftware'/profile/'NativeMessagingHosts/io.hyprash.browser.json'
+            if host.exists() and json.loads(host.read_text()).get('path')==str(ROOT/'scripts/browser_host.py'):
+                host.unlink()
         print('Removed Hyprash keybinding and launcher. Project and notes preserved.')
     else:
         desktop.parent.mkdir(parents=True,exist_ok=True)

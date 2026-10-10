@@ -19,7 +19,7 @@ class WorkflowTests(unittest.TestCase):
     def test_first_result_is_a_followup(self):
         self.assertEqual(json.loads(parse('open the first link that showed up')[0].value),dict(action='result',index=1))
     def test_named_fields_are_not_address_bar_shortcuts(self):
-        self.assertEqual(json.loads(parse('click the search bar')[0].value),dict(action='click',target='Search'))
+        self.assertEqual(json.loads(parse('click the search bar')[0].value),dict(action='click',target='Search',role='field'))
         self.assertEqual(parse('go to the address bar')[0].kind,'address')
     def test_one_complete_task_reaches_laya(self):
         b=Backend();b.emit=Mock();b.submit_decision=Mock()

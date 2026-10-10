@@ -24,6 +24,7 @@ def catalog():
     return found
 
 def launch(name):
+    if name=='notes' and not obsidian_vault():return False
     apps=catalog()
     aliases={'notes':'obsidian','camera':'camera','snapshot':'camera'}
     key=aliases.get(name,name)
@@ -58,9 +59,9 @@ def obsidian_vault():
     try: vaults=json.loads(path.read_text()).get('vaults',{})
     except (OSError,ValueError):return None
     opened=[(key,Path(v['path'])) for key,v in vaults.items() if v.get('open')]
-    if len(opened)==1:return opened[0]
+    if len(opened)==1:return opened[0] if opened[0][1].is_dir() else None
     if len(vaults)==1:
-        key,v=next(iter(vaults.items()));return key,Path(v['path'])
+        key,v=next(iter(vaults.items()));directory=Path(v['path']);return (key,directory) if directory.is_dir() else None
     return None
 
 def new_obsidian_note(title,content='',append=False):
@@ -68,6 +69,11 @@ def new_obsidian_note(title,content='',append=False):
     if not vault:raise RuntimeError('Select one vault in Obsidian first, or say “open Hyprash notes”.')
     if '/' in title or '\\' in title or title in ('.','..'):raise ValueError('Use a note title without path separators.')
     key,directory=vault
+    existing=list(directory.rglob(title+'.md'))
+    if not append and existing:
+        raise RuntimeError('A note with that title already exists. Choose a new title.')
+    if append and len(existing)!=1:
+        raise RuntimeError('The named note is missing or ambiguous; create a unique named note first.')
     params={'vault':key,'name':title,'content':content}
     if append:params['append']='true'
     # The app chooses its configured note folder; never write arbitrary vault paths.
@@ -77,3 +83,16 @@ def new_obsidian_note(title,content='',append=False):
         if len(matches)==1 and (not content or content in matches[0].read_text()):return title
         time.sleep(.1)
     raise RuntimeError('Obsidian did not confirm the saved note. Check its vault/dialog.')
+
+
+def create_obsidian_note(content):
+    """Use literal dictated content as the body, with a short unique title."""
+    import re
+    vault=obsidian_vault()
+    if not vault:raise RuntimeError('Open a valid vault in Obsidian first.')
+    base=re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ',content).strip(' .')[:70] or 'Voice note'
+    title=base
+    counter=2
+    while list(vault[1].rglob(title+'.md')):
+        title=base+' ('+str(counter)+')';counter+=1
+    return new_obsidian_note(title,content)

@@ -7,7 +7,9 @@
   "permissions": [
     "tabs",
     "scripting",
-    "nativeMessaging"
+    "nativeMessaging",
+    "storage",
+    "alarms"
   ],
   "host_permissions": [
     "http://*/*",

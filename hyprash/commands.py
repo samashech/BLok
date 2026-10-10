@@ -58,7 +58,7 @@ def parse(text, final=True):
         action = None
         if verb.endswith("search bar"):
             import json
-            action = Action("ui_control", json.dumps({'action':'click','target':'Search'}))
+            action = Action("ui_control", json.dumps({'action':'click','target':'Search','role':'field'}))
         elif verb.endswith(" bar"):
             action = Action("address")
         elif verb == "type" and closed and arg:

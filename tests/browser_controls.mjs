@@ -23,6 +23,10 @@ try{
  assert.equal(await page.locator('input').inputValue(),'hello');
  await page.evaluate(pageAction,{op:'click',target:'Save'});
  assert.equal(await page.locator('button').textContent(),'Done');
+ await page.setContent('<span id=label>Search</span><input aria-labelledby=label><button aria-label=Search>Search</button>');
+ await page.evaluate(pageAction,{op:'click',target:'Search',role:'field'});
+ assert.equal(await page.locator('input').evaluate(e=>document.activeElement===e),true);
+ await page.evaluate(pageAction,{op:'click',target:'Search button'});
  await page.setContent('<button>Save</button><button>Save</button>');
  await assert.rejects(page.evaluate(pageAction,{op:'click',target:'Save'}),/More than one/);
  console.log('PASS: named controls, field verification and ambiguous match rejection');

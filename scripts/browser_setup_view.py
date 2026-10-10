@@ -5,8 +5,13 @@ from hyprash.browser import focus,run,control
 focus()
 if '--navigate' in sys.argv:
     control('browser_type','chrome://extensions');control('browser_key','enter');time.sleep(.8)
+if '--dismiss-picker' in sys.argv:run(['wtype','-k','Escape'])
+if '--select-folder' in sys.argv:run(['wtype','-M','alt','-k','s','-m','alt'])
 if '--tab' in sys.argv:run(['wtype','-k','Tab'])
 if '--space' in sys.argv:run(['wtype','-k','space'])
+if '--open-picker' in sys.argv:
+    run(['wtype','-k','Tab','-k','Return'])
+    time.sleep(1)
 if '--load' in sys.argv:
     run(['wtype','-k','Tab','-k','Return'])
     time.sleep(.4)
