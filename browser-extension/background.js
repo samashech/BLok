@@ -45,6 +45,10 @@ export async function run(req) {
   }
   async function execute(task){
     await check();
+    if(task.action==='inspect' && sites[task.site]) {
+      await siteTab(sites[task.site]);
+      return act({op:'inspect'});
+    }
     if(task.action==='sequence') {
       if(!Array.isArray(task.steps)||task.steps.length<1||task.steps.length>6||task.steps.some(s=>s.action==='sequence'))throw Error('Invalid task sequence.');
       let result;
@@ -76,7 +80,10 @@ export async function run(req) {
       if(!url||!/^https?:\/\//.test(url))throw Error('Only supported web destinations can be searched.');
       await siteTab(url);
       if(task.action==='navigate') {await navigate(url);return {message:'Opened '+new URL(tab.url).hostname,tabId:tab.id};}
-      if(site==='spotify')await navigate(sites.spotify+'/'+encodeURIComponent(task.query));
+      if(site==='spotify') {
+        const destination=sites.spotify+'/'+encodeURIComponent(task.query);
+        if(tab.url!==destination)await navigate(destination);
+      }
       await until(async()=> (await chrome.tabs.get(tab.id)).status==='complete');
       stage='Submitting '+site+' search';
       if(site!=='spotify')await until(()=>act({op:'search',site,query:task.query}));

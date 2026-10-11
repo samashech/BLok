@@ -91,23 +91,40 @@ export async function pageAction(request, captureErrors=false) {
   }
   if(request.op==='play') {
     const rows=[...document.querySelectorAll('[data-testid="tracklist-row"],[role="row"]')].filter(visible);
+    // Spotify also renders search results as cards instead of track-list rows.
+    // Find the smallest card containing one song, its artists and its play button.
+    for(const link of document.querySelectorAll('main a[href*="/track/"]')) {
+      let card=link.parentElement;
+      for(let depth=0;card && depth<6;depth++,card=card.parentElement) {
+        const tracks=new Set([...card.querySelectorAll('a[href*="/track/"]')].map(a=>a.href));
+        if(tracks.size>1)break;
+        const button=[...card.querySelectorAll('button')].find(b=>['play ','pause '].some(prefix=>norm(name(b))===prefix+norm(link.innerText)));
+        if(button && visible(card)){rows.push(card);break;}
+      }
+    }
     const words=norm(request.query);
     const titleLink=r=>r.querySelector('a[href*="/track/"],[data-testid="internal-track-link"]');
     const byArtist=r=>[...r.querySelectorAll('a[href*="/artist/"]')].some(a=>norm(a.innerText)===words);
-    const row=request.mode==='artist'?rows.find(byArtist):
+    const row=request.mode==='artist'?rows.find(r=>titleLink(r)&&byArtist(r)):
       rows.find(r=>norm(titleLink(r)?.innerText)===words)||rows.find(byArtist);
     if(!row) throw Error('No matching playable song appeared. Try an exact song or artist name.');
     const track=titleLink(row);
-    const play=row.querySelector('button[aria-label^="Play"],button[data-testid="play-button"]');
+    const play=row.querySelector('button[aria-label^="Play"],button[aria-label^="Pause"],button[data-testid="play-button"]');
     if(!play || play.disabled || play.getAttribute('aria-disabled')==='true') throw Error('Spotify has not provided a playable control for this song.');
+    const selected={message:'Requested playback',track:track.innerText,trackUrl:track.href};
     row.scrollIntoView({block:'center'});
-    play.click();return {message:'Requested playback',track:track.innerText,trackUrl:track.href};
+    if(!norm(name(play)).startsWith('pause'))play.click();
+    return selected;
   }
   if(request.op==='playing') {
-    const pause=document.querySelector('[data-testid="control-button-playpause"][aria-label="Pause"]');
-    const track=document.querySelector('[data-testid="context-item-link"]');
+    const transport=document.querySelector('[data-testid="now-playing-bar"],footer');
+    const pause=transport?.querySelector('button[aria-label="Pause"]') || document.querySelector('[data-testid="control-button-playpause"][aria-label="Pause"]');
+    const track=transport?.querySelector('a[href*="/track/"]') || document.querySelector('[data-testid="context-item-link"]');
     const same=request.trackUrl?new URL(track?.href||location.href).pathname===new URL(request.trackUrl).pathname:norm(track?.innerText)===norm(request.query);
-    return {playing:!!pause&&same,track:track?.innerText||''};
+    const selected=request.trackUrl && nodes.find(e=>e.matches('a[href*="/track/"]') && new URL(e.href).pathname===new URL(request.trackUrl).pathname);
+    const cardPaused=selected && nodes.some(e=>e.matches('button') && norm(name(e))==='pause '+norm(selected.innerText));
+    const transportPaused=nodes.some(e=>e.matches('button') && norm(name(e))==='pause');
+    return {playing:!!((pause&&same)||(cardPaused&&transportPaused)),track:track?.innerText||selected?.innerText||''};
   }
   if(request.op==='click'||request.op==='fill') {
     const target=norm(request.target).replace(/^(the )/,'').replace(/ (button|link|field)$/,'');

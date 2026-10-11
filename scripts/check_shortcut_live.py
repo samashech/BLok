@@ -30,7 +30,7 @@ else:
             assert output.read_text().endswith('.'),repr(output.read_text())
             print('PASS: plain period reaches the focused app',flush=True)
             before=output.read_text().count('.')
-            keys=subprocess.Popen(['wtype','-M','ctrl','-P','period','-s','1500','-m','ctrl','-p','period'])
+            keys=subprocess.Popen(['wtype','-P','Control_L','-P','period','-s','2500','-p','Control_L','-p','period'])
             recorded=False
             while keys.poll() is None:
                 current=json.loads(subprocess.check_output(['voxtype','status','--format','json']))
