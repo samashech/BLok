@@ -1,5 +1,6 @@
 // Executed in Chrome's isolated world. Page text is data, never executable input.
-export async function pageAction(request) {
+export async function pageAction(request, captureErrors=false) {
+  try {
   const visible = e => { const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'; };
   const norm = s => String(s||'').toLowerCase().replace(/[’]/g,"'").replace(/\s+/g,' ').trim();
   const name = e => (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' ').trim() || e.getAttribute('aria-label') || (e.labels && [...e.labels].map(l=>l.innerText).join(' ')) || e.getAttribute('placeholder') || e.innerText || e.title || '';
@@ -28,6 +29,7 @@ export async function pageAction(request) {
     return message('Submitted search');
   }
   if(request.op==='search_ready') {
+    if(request.site==='spotify') return nodes.some(e=>e.matches('input') && norm(e.value)===norm(request.query)) && nodes.some(e=>e.matches('a[href*="/track/"],a[href*="/artist/"]'));
     if(request.site==='youtube') {
       const field=document.querySelector('input[name="search_query"],input#search');
       return location.pathname==='/results' && norm(field?.value)===norm(request.query)
@@ -121,4 +123,8 @@ export async function pageAction(request) {
     e.click();return message('Activated '+name(e));
   }
   throw Error('Unsupported browser action');
+  } catch(error) {
+    if(captureErrors)return {hyprashError:error.message};
+    throw error;
+  }
 }

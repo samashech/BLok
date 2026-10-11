@@ -6,9 +6,10 @@ const sites={google:'https://www.google.com/',youtube:'https://www.youtube.com/'
 const siteOf=url=>{try{const h=new URL(url).hostname;return h==='www.youtube.com'||h==='youtube.com'?'youtube':h==='open.spotify.com'?'spotify':/(^|\.)google\.[a-z.]+$/.test(h)?'google':null;}catch{return null;}};
 export async function run(req) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping') return {message:'Brave connected'};
+  if(req.action==='ping') return {message:'Brave connected',version:'workflow-v3-spotify-ready'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const deadline=Date.now()+40000;
+  let stage='Starting browser task';
   const check=async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
     if(turn!==epoch)throw Error('Cancelled');
@@ -16,12 +17,20 @@ export async function run(req) {
   };
   const tabs=await chrome.tabs.query({currentWindow:true});
   let tab=tabs.find(t=>t.active);
-  async function act(args){await check();const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:pageAction,args:[args]});return results[0].result;}
+  async function act(args){
+    await check();
+    const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:pageAction,args:[args,true]});
+    const result=results[0]?.result;
+    if(result?.hyprashError)throw Error(result.hyprashError);
+    if(result===undefined)throw Error('The page action did not return a result.');
+    return result;
+  }
   async function until(fn,timeout=15000){const end=Math.min(deadline,Date.now()+timeout);let last;while(Date.now()<end){await check();try{const r=await fn();if(r)return r;}catch(e){last=e;}await sleep(250);}throw last||Error('The page did not reach the expected state.');}
   async function focus(t){await check();await chrome.tabs.update(t.id,{active:true});await chrome.windows.update(t.windowId,{focused:true});tab=await chrome.tabs.get(t.id);}
   async function navigate(url){
     await check();
     if(!/^https?:\/\//.test(url))throw Error('Only web URLs are supported.');
+    stage='Loading '+new URL(url).hostname;
     if(tab)await chrome.tabs.update(tab.id,{url});else tab=await chrome.tabs.create({url,active:true});
     await until(async()=>{const t=await chrome.tabs.get(tab.id);return t.status==='complete'&&!t.pendingUrl;});
     tab=await chrome.tabs.get(tab.id);
@@ -67,9 +76,11 @@ export async function run(req) {
       if(!url||!/^https?:\/\//.test(url))throw Error('Only supported web destinations can be searched.');
       await siteTab(url);
       if(task.action==='navigate') {await navigate(url);return {message:'Opened '+new URL(tab.url).hostname,tabId:tab.id};}
-      if(site==='spotify'&&!new URL(tab.url).pathname.startsWith('/search'))await navigate(sites.spotify);
+      if(site==='spotify')await navigate(sites.spotify+'/'+encodeURIComponent(task.query));
       await until(async()=> (await chrome.tabs.get(tab.id)).status==='complete');
-      await until(()=>act({op:'search',site,query:task.query}));
+      stage='Submitting '+site+' search';
+      if(site!=='spotify')await until(()=>act({op:'search',site,query:task.query}));
+      stage='Waiting for '+site+' search results';
       await until(async()=>{
         const t=await chrome.tabs.get(tab.id),u=new URL(t.url);
         const matched=site==='google'?u.searchParams.get('q')===task.query:site==='youtube'?u.searchParams.get('search_query')===task.query:decodeURIComponent(u.pathname).toLowerCase().includes(task.query.toLowerCase());
@@ -78,7 +89,9 @@ export async function run(req) {
       if(task.action==='play'){
         if(site==='youtube')return execute({action:'result',index:task.index||1,play:true});
         if(site!=='spotify')throw Error('Playback is supported on Spotify and YouTube.');
+        stage='Selecting a matching Spotify song';
         const selected=await until(()=>act({op:'play',query:task.query,mode:task.mode}));
+        stage='Confirming Spotify playback';
         await until(async()=> (await act({op:'playing',query:selected.track,trackUrl:selected.trackUrl})).playing,12000);
         return {message:'Playing '+selected.track+' on Spotify',tabId:tab.id};
       }
@@ -98,7 +111,7 @@ export async function run(req) {
     }
     return act({op:task.action,...task});
   }
-  return execute(req);
+  try{return await execute(req);}catch(e){throw Error(stage+': '+e.message);}
 }
 function connect(){
   if(port)return;
