@@ -34,7 +34,7 @@ def main():
         command=shlex.quote(str(ROOT/'hyprash.sh'))
         updated=updated.rstrip()+'\n\n'+BEGIN
         updated+='o.bind("CTRL + period", "Hyprash hold to speak", '+json.dumps(command+' ptt-start')+')\n'
-        updated+='o.bind("CTRL + period", "Hyprash release to execute", '+json.dumps(command+' ptt-finish')+', { release = true, ignore_mods = true })\n'+END
+        updated+='o.bind("CTRL + period", "Hyprash release to execute", '+json.dumps(command+' ptt-finish')+', { release = true, ignore_mods = true, non_consuming = true })\n'+END
     backup=bindings.with_name('bindings.lua.hyprash-backup-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     backup.write_text(original)
     bindings.write_text(updated)

@@ -12,7 +12,7 @@ cases=[
  ('Go to the address bar.',('address','')),
  ('Type weather in Delhi.',('browser_type','weather in delhi')),
  ('Press enter.',('browser_key','enter')),
- ('New tab.',('browser_key','new tab')),
+ ('New tab.',('web_task','{"action": "new_tab"}')),
  ('Go back.',('browser_key','back')),
  ('Look up rock and roll.',('url','https://www.google.com/search?q=rock+and+roll')),
  ('Can you bring up my terminal?',('open','terminal')),
@@ -30,6 +30,10 @@ cases=[
  ('hello how are you',None),
  ('delete all my files',None),
 ]
+from hyprash.commands import parse
+for phrase in ['create a note saying hello in obsidian','play a justin bieber song','play a song by adele','open a new tab','search for bbs in youtube and play the first video','search for bbs in youtube and play the second video','open github and go to my repositories and find clickyAI and open it']:
+    action=parse(phrase)[0]
+    cases.append((phrase,(action.kind,action.value)))
 failed=[]
 for text,expected in cases:
     d=agent.decide(text)

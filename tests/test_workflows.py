@@ -38,3 +38,45 @@ class WorkflowTests(unittest.TestCase):
         b=Backend();b.emit=Mock();b.publish_note=Mock();b.ensure_note=Mock()
         with patch('hyprash.desktop.launch',return_value=False):b.execute(Action('open','notes'))
         self.assertEqual(b.notes_target,'hyprash');b.publish_note.assert_called_once()
+
+    def test_reported_compound_requests(self):
+        for phrase,action in [
+            ('play a justin bieber song','play'),
+            ('play a song by adele','play'),
+            ('open a new tab','new_tab'),
+            ('search for bbs in youtube and play the second video','sequence'),
+            ('open github and go to my repositories and find clickyAI and open it','github_repo')]:
+            parsed=parse(phrase)
+            self.assertEqual(len(parsed),1,phrase)
+            self.assertEqual(parsed[0].kind,'web_task')
+            self.assertEqual(json.loads(parsed[0].value)['action'],action)
+        artist=json.loads(parse('play a justin bieber song')[0].value)
+        self.assertEqual((artist['query'],artist['mode']),('justin bieber','artist'))
+        steps=json.loads(parse('search for bbs in youtube and play the second video')[0].value)['steps']
+        self.assertEqual(steps,[{'action':'search','site':'youtube','query':'bbs'},{'action':'result','index':2,'play':True}])
+
+    def test_obsidian_content_is_not_a_title_or_destination(self):
+        action=parse('create a note saying hello in obsidian')[0]
+        self.assertEqual(action.kind,'obsidian_note')
+        self.assertEqual(json.loads(action.value),{'content':'hello'})
+        backend=Backend();backend.emit=Mock()
+        with patch('hyprash.desktop.create_obsidian_note',return_value='hello') as create:
+            backend.execute(action)
+            create.assert_called_once_with('hello')
+        self.assertEqual(backend.notes_target,'obsidian')
+
+    def test_negated_compound_request_does_not_execute(self):
+        self.assertEqual(parse("don't search for bbs in youtube and play the second video"),[])
+
+    def test_obsidian_uri_uses_percent_encoded_spaces(self):
+        from hyprash import desktop
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            def launched(args):
+                self.assertIn('name=hello%20world',args[1])
+                self.assertIn('content=hello%20there',args[1])
+                (root/'hello world.md').write_text('hello there')
+            with patch.object(desktop,'obsidian_vault',return_value=('vault',root)),patch.object(desktop,'start_app',side_effect=launched):
+                self.assertEqual(desktop.new_obsidian_note('hello world','hello there'),'hello world')

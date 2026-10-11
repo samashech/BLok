@@ -19,6 +19,18 @@ Try:
 7. “Open x dot com.”
 8. “Open camera.” Then: “Take a picture of me.”
 
+Multi-step examples supported in one utterance:
+
+- “Create a note saying hello in Obsidian” writes `hello` into a new note, using a unique title if needed.
+- “Play a Justin Bieber song” searches Spotify, selects a song credited to that artist, and verifies the selected track is playing. “Play a song by Adele” also works.
+- “Open a new tab” creates a tab through the Brave extension.
+- “Search for bbs in YouTube and play the second video” waits for results, selects the requested video, and checks playback.
+- “Open GitHub and go to my repositories and find ClickyAI and open it” uses the signed-in account's repository list and matches the requested repository name.
+
+These are supported task sequences, not arbitrary autonomous browsing. A failed or cancelled step stops the remaining steps. YouTube playback can be blocked by site restrictions; Spotify can require account permissions. Hyprash reports these failures instead of claiming playback.
+
+The dedicated Obsidian vault is `data/Obsidian`; `data/obsidian-vault.json` selects it without deleting other vault registrations. Back up this folder like any other notes. Create/register it explicitly with `.venv/bin/python scripts/setup_obsidian_vault.py`; ordinary note commands do not create or move vaults.
+
 Named controls: “click the Search button”, “click the search bar”, “type bbs into Search”, or “click Close”. Matching uses visible labels; ambiguous matches ask for a fuller label. Password fields require direct typing.
 
 Browser controls: “Go to the address bar”, “type weather in Delhi”, “press enter”, “new tab”, “go back”, “go forward”, “reload the page”. You can combine them: “Go to the address bar and type weather in Delhi and press enter”. Searches accept “search for”, “look up”, and “look online for”; queries keep words such as “and”.
@@ -87,6 +99,7 @@ Uninstall integration: `python3 scripts/install.py --uninstall`. Quit: `./hypras
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python scripts/check_laya.py     # real model, offline; no desktop effects
 .venv/bin/python scripts/check_pipeline.py # real model → persisted notes; cancellation
+node tests/browser_workflows.mjs          # ordering, cancellation, native tabs and playback verification
 node tests/browser_controls.mjs           # isolated browser DOM fixtures (Playwright)
 .venv/bin/python scripts/check_browser_bridge.py # native messaging bridge
 node --test tests/test_orbs.mjs            # all 9 original animation states

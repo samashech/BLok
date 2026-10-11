@@ -200,7 +200,7 @@ class Backend:
                     commands = {"browser":["xdg-open", "https://www.google.com"],
                         "terminal":["gtk-launch", "foot"], "files":["gtk-launch", "org.gnome.Nautilus"],
                         "code":["gtk-launch", "code"]}
-                    if value in commands:self.run_command(commands[value])
+                    if value in commands:desktop.start_app(commands[value])
                     elif not desktop.launch(value):raise RuntimeError("No installed app named " + value)
                 message = f"Opened {value}" if value in ("notes", "camera") else f"Requested {value}"
                 if value=="notes" and self.notes_target=="hyprash":

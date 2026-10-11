@@ -34,4 +34,13 @@ try{
  await page.evaluate(pageAction,{op:'play',query:"God's Plan"});
  assert.equal((await page.evaluate(pageAction,{op:'playing',query:"God's Plan"})).playing,true);
  console.log('PASS: matching Spotify track activation and playback-state check');
+ await page.setContent(`<div data-testid="tracklist-row"><a href="/track/wrong">Unrelated song</a><a href="/artist/other">Someone else</a><button aria-label="Play unrelated">Play</button></div><div data-testid="tracklist-row"><a href="/track/baby">Baby</a><a href="/artist/justin">Justin Bieber</a><button aria-label="Play Baby" onclick="this.dataset.played='yes'">Play</button></div>`);
+ const selected=await page.evaluate(pageAction,{op:'play',query:'justin bieber',mode:'artist'});
+ assert.equal(selected.track,'Baby');
+ assert.equal(await page.locator('[aria-label="Play Baby"]').getAttribute('data-played'),'yes');
+ await page.route('https://github.com/**',r=>r.fulfill({contentType:'text/html',body:`<meta name="user-login" content="fixture-user"><form><input id="your-repos-filter" name="q"></form><div id="user-repositories-list"><h3><a href="/fixture-user/ClickyAI" itemprop="name codeRepository">ClickyAI</a></h3></div>`}));
+ await page.goto('https://github.com/fixture-user?tab=repositories');
+ assert.equal((await page.evaluate(pageAction,{op:'github_user'})).user,'fixture-user');
+ assert.equal((await page.evaluate(pageAction,{op:'github_repository',query:'clickyai'})).url,'https://github.com/fixture-user/ClickyAI');
+ console.log('PASS: artist matches track artist, and GitHub resolves repository within signed-in owner');
 }finally{await browser.close();}

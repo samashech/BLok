@@ -3,6 +3,8 @@ import sys,time,subprocess
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from hyprash.browser import focus,run,control
 focus()
+if '--fullscreen' in sys.argv:
+    run(['wtype','-k','F11']);time.sleep(.5)
 if '--navigate' in sys.argv:
     control('browser_type','chrome://extensions');control('browser_key','enter');time.sleep(.8)
 if '--dismiss-picker' in sys.argv:run(['wtype','-k','Escape'])
