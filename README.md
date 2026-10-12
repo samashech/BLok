@@ -95,10 +95,15 @@ Uninstall integration: `python3 scripts/install.py --uninstall`. Quit: `./hypras
 
 ## Verification and development
 
+Phased reliability work and its measured limits are tracked in [simular-similar.md](simular-similar.md).
+Browser execution separates readiness observations, one-time actions, and outcome checks. Generic button clicks report an unverified result and cannot automatically advance a dependent browser sequence. Current progress is shown in the overlay; `./hyprash.sh status` includes the latest execution evidence and stage timings.
+
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
 .venv/bin/python scripts/check_laya.py     # real model, offline; no desktop effects
 .venv/bin/python scripts/check_pipeline.py # real model → persisted notes; cancellation
+npm ci                                  # project-local browser test dependency
+node --test tests/execution.mjs          # polling, one-time actions, cancellation and timeouts
 node tests/browser_workflows.mjs          # ordering, cancellation, native tabs and playback verification
 node tests/browser_controls.mjs           # isolated browser DOM fixtures (Playwright)
 .venv/bin/python scripts/check_browser_bridge.py # native messaging bridge

@@ -165,7 +165,7 @@ class Backend:
                 self.stop()
                 return
             if kind == "web_task":
-                message=browser.request(json.loads(value))['message']
+                message=self.browser_task(json.loads(value))
             elif kind == "obsidian_note":
                 title=desktop.create_obsidian_note(json.loads(value)['content'])
                 self.notes_target="obsidian"
@@ -177,9 +177,9 @@ class Backend:
                 if active.get('title') in ('Hyprash · Notes','Hyprash · Camera'):
                     self.emit(type="ui_control", window=active['title'], **task)
                     return
-                message=desktop.control(task)['message']
+                message=self.browser_task(task) if browser.BROWSERS.fullmatch(active.get('class','')) else desktop.control(task)['message']
             elif kind in ("address", "browser_type", "browser_key"):
-                if kind=="browser_key" and value=="new tab":browser.request({'action':'new_tab'})
+                if kind=="browser_key" and value=="new tab":self.browser_task({'action':'new_tab'})
                 else:browser.control(kind, value)
                 message = {"address":"Address bar ready", "browser_type":"Typed in address bar", "browser_key":"Browser: " + value}[kind]
             elif kind == "open":
@@ -211,7 +211,7 @@ class Backend:
                 url=urlparse(value)
                 task=({'action':'search','query':parse_qs(url.query)['q'][0]} if url.hostname=='www.google.com' and url.path=='/search' and 'q' in parse_qs(url.query)
                       else {'action':'navigate','url':value})
-                message=browser.request(task)['message']
+                message=self.browser_task(task)
             elif kind in ("new_note", "title", "write"):
                 if self.notes_target == "obsidian":
                     if kind == "title":
@@ -247,7 +247,18 @@ class Backend:
                 return
             self.emit(type="action", message=message)
         except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
+            if isinstance(error,browser.BrowserTaskError):
+                self.emit(type="execution",verified=False,trace=error.trace)
             self.emit(type="action", error=True, message=str(error))
+
+    def browser_task(self, task):
+        def progress(event):
+            if event.get('status')=='running':
+                self.emit(type="activity",state="executing",message=event['message'])
+        result=browser.request(task,on_progress=progress)
+        self.emit(type="execution",verified=result.get('verified',False),
+                  evidence=result.get('evidence',''),trace=result.get('trace',[]))
+        return result['message']
 
     def start_decisions(self):
         if self.decision_worker is not None:

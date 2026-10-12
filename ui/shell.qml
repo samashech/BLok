@@ -22,6 +22,7 @@ ShellRoot {
     property string activityMessage: ""
     property string engine: "Laya · starting"
     property int inferenceMs: 0
+    property var lastExecution: ({})
     property bool reducedMotion: Quickshell.env("HYPRASH_REDUCED_MOTION") === "1"
     property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError
     property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? (activity === "executing" ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
@@ -48,6 +49,7 @@ ShellRoot {
         if (event.type === "activity") { activity = event.state; busy = activity !== "idle"; activityMessage = event.message || "" }
         if (event.type === "engine") engine = event.message
         if (event.type === "decision") inferenceMs = event.elapsed_ms
+        if (event.type === "execution") lastExecution = event
         if (event.type === "status") { state = event.state; message = event.message }
         if (event.type === "level") level = event.value
         if (event.type === "transcript" && event.text) transcript = event.text
@@ -78,7 +80,7 @@ ShellRoot {
         function hide(): void { root.hide() }
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }
         function appearance(name: string): void { root.send({command: "theme", name: name}) }
-        function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs}) }
+        function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, activityMessage: root.activityMessage, execution: root.lastExecution, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs}) }
         function quit(): void { root.send({command: "stop"}); Qt.quit() }
     }
     PanelWindow {
@@ -206,7 +208,7 @@ ShellRoot {
                 Text {
                     visible: root.expanded
                     Layout.fillWidth: true; Layout.leftMargin: 12
-                    text: root.lastAction || (root.busy ? root.activityMessage : root.message)
+                    text: root.busy ? (root.activityMessage || "Working…") : (root.lastAction || root.message)
                     color: root.actionError ? root.theme.error : root.theme.muted
                     font.family: root.theme.font; font.pixelSize: 10; elide: Text.ElideRight
                     ToolTip.visible: root.opened && surface.reveal > 0.99 && (actionHover.hovered); ToolTip.text: text

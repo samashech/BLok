@@ -43,3 +43,19 @@ class BrowserTests(unittest.TestCase):
         backend.voice.finish.assert_called_once()
         backend.voice.cancel.assert_not_called()
         self.assertFalse(backend.listening)
+
+    def test_browser_progress_and_verification_reach_backend(self):
+        backend=Backend();backend.emit=Mock()
+        def request(task,on_progress):
+            on_progress({'status':'running','message':'Confirming Spotify playback'})
+            return {'message':'Playing Baby','verified':True,'evidence':'Matching track','trace':[{'kind':'verify','status':'complete'}]}
+        with patch.object(browser,'request',side_effect=request):
+            self.assertEqual(backend.browser_task({'action':'play'}),'Playing Baby')
+        backend.emit.assert_any_call(type='activity',state='executing',message='Confirming Spotify playback')
+        backend.emit.assert_any_call(type='execution',verified=True,evidence='Matching track',trace=[{'kind':'verify','status':'complete'}])
+
+    def test_old_extension_response_is_not_marked_verified(self):
+        backend=Backend();backend.emit=Mock()
+        with patch.object(browser,'request',return_value={'message':'Legacy result'}):
+            backend.browser_task({'action':'new_tab'})
+        backend.emit.assert_called_with(type='execution',verified=False,evidence='',trace=[])

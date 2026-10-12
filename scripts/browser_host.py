@@ -9,6 +9,7 @@ import socket
 import struct
 import sys
 import threading
+import time
 import uuid
 
 runtime=Path(os.environ.get('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'))
@@ -46,8 +47,12 @@ def client(conn):
         payload=json.dumps(request).encode()
         with write_lock:
             sys.stdout.buffer.write(struct.pack('=I',len(payload))+payload);sys.stdout.buffer.flush()
-        response=pending[key].get(timeout=45)
-        conn.sendall(json.dumps(response).encode()+b'\n')
+        deadline=time.monotonic()+45
+        while True:
+            response=pending[key].get(timeout=max(.001,deadline-time.monotonic()))
+            conn.sendall(json.dumps(response).encode()+b'\n')
+            if 'progress' not in response:break
+            if time.monotonic()>=deadline:raise TimeoutError('Browser task timed out')
     except Exception as error:
         try:conn.sendall(json.dumps({'error':str(error)}).encode()+b'\n')
         except OSError:pass

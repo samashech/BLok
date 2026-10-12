@@ -21,14 +21,16 @@ export async function pageAction(request, captureErrors=false) {
     const selectors=request.site==='google'?'textarea[name="q"],input[name="q"]':request.site==='youtube'?'input[name="search_query"],input#search': 'input[data-testid="search-input"],input[placeholder*="play"],input[role="searchbox"]';
     const field=[...document.querySelectorAll(selectors)].find(visible);
     if(!field) throw Error('Search field is not available yet. Dismiss any sign-in or consent dialog first.');
-    setValue(field,request.query);
-    if(request.site==='spotify') return message('Entered Spotify search');
     const form=field.closest('form');
     const button=request.site==='youtube'?document.querySelector('button.ytSearchboxComponentSearchButton,button#search-icon-legacy'):form?.querySelector('[type="submit"]');
+    if(request.prepareOnly)return !field.disabled && !field.readOnly && (request.site==='spotify'||!!(button&&!button.disabled)||!!form);
+    setValue(field,request.query);
+    if(request.site==='spotify') return message('Entered Spotify search');
     if(button) button.click(); else if(form) form.requestSubmit(); else throw Error('Could not identify the search submit control.');
     return message('Submitted search');
   }
   if(request.op==='search_ready') {
+    if(request.site==='google')return !![...document.querySelectorAll('#search,#rso')].find(visible);
     if(request.site==='spotify') return nodes.some(e=>e.matches('input') && norm(e.value)===norm(request.query)) && nodes.some(e=>e.matches('a[href*="/track/"],a[href*="/artist/"]'));
     if(request.site==='youtube') {
       const field=document.querySelector('input[name="search_query"],input#search');
@@ -47,6 +49,7 @@ export async function pageAction(request, captureErrors=false) {
   if(request.op==='github_filter') {
     const field=document.querySelector('input#your-repos-filter,input[name="q"]');
     if(!field || !visible(field)) throw Error('The repository filter is not available yet.');
+    if(request.prepareOnly)return !field.disabled && !field.readOnly;
     setValue(field,request.query);
     const form=field.closest('form');
     if(form) form.requestSubmit();
@@ -63,6 +66,7 @@ export async function pageAction(request, captureErrors=false) {
     if(matches.length!==1) throw Error(matches.length?'Several repositories match that name. Use the exact name.':'No matching repository appeared in your repository list.');
     return {url:matches[0].href,title:name(matches[0]).trim()};
   }
+  if(request.op==='video_ready')return !!document.querySelector('video.html5-main-video,video');
   if(request.op==='video_play') {
     const video=document.querySelector('video.html5-main-video,video');
     if(!video) throw Error('The video player has not loaded yet.');
@@ -106,12 +110,13 @@ export async function pageAction(request, captureErrors=false) {
     const titleLink=r=>r.querySelector('a[href*="/track/"],[data-testid="internal-track-link"]');
     const byArtist=r=>[...r.querySelectorAll('a[href*="/artist/"]')].some(a=>norm(a.innerText)===words);
     const row=request.mode==='artist'?rows.find(r=>titleLink(r)&&byArtist(r)):
-      rows.find(r=>norm(titleLink(r)?.innerText)===words)||rows.find(byArtist);
+      rows.find(r=>norm(titleLink(r)?.innerText)===words)||rows.find(r=>titleLink(r)&&byArtist(r));
     if(!row) throw Error('No matching playable song appeared. Try an exact song or artist name.');
     const track=titleLink(row);
     const play=row.querySelector('button[aria-label^="Play"],button[aria-label^="Pause"],button[data-testid="play-button"]');
     if(!play || play.disabled || play.getAttribute('aria-disabled')==='true') throw Error('Spotify has not provided a playable control for this song.');
     const selected={message:'Requested playback',track:track.innerText,trackUrl:track.href};
+    if(request.prepareOnly)return selected;
     row.scrollIntoView({block:'center'});
     if(!norm(name(play)).startsWith('pause'))play.click();
     return selected;
@@ -134,10 +139,16 @@ export async function pageAction(request, captureErrors=false) {
     if(!matches.length) matches=eligible.filter(e=>norm(name(e)).includes(target));
     if(matches.length!==1) throw Error(matches.length?'More than one control matches. Say its full label.':'No visible control named '+request.target);
     const e=matches[0];if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
+    if(request.verifyOnly)return !e.matches('input[type="password"]') && String(e.value??e.textContent)===request.text;
     e.scrollIntoView({block:'center'});
     if(request.op==='fill') {setValue(e,request.text);return message('Filled '+name(e));}
-    if(e.matches('input,textarea,[contenteditable="true"]')) {e.focus();return message('Focused '+name(e));}
-    e.click();return message('Activated '+name(e));
+    if(e.matches('input,textarea,[contenteditable="true"]')) {
+      e.focus();
+      if(document.activeElement!==e)throw Error('The field did not gain focus.');
+      return {...message('Focused '+name(e)),verified:true,evidence:'Requested field owns focus'};
+    }
+    const label=name(e);e.click();
+    return {...message('Clicked '+label+' · result not verified'),verified:false,evidence:'Click dispatched; downstream effect has no verifier'};
   }
   throw Error('Unsupported browser action');
   } catch(error) {

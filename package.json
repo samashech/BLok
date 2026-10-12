@@ -1,0 +1,12 @@
+{
+  "name": "hyprash-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:execution": "node --test tests/execution.mjs",
+    "test:browser": "node tests/browser_workflows.mjs && node tests/browser_controls.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
+}

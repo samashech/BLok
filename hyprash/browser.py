@@ -45,7 +45,12 @@ def control(kind, value=''):
         run(['wtype', *shortcuts[value]])
 
 
-def request(payload, timeout=48):
+class BrowserTaskError(RuntimeError):
+    def __init__(self, message, trace=None):
+        super().__init__(message)
+        self.trace=trace or []
+
+def request(payload, timeout=48, on_progress=None):
     import os
     import socket
     from pathlib import Path
@@ -54,11 +59,18 @@ def request(payload, timeout=48):
         with socket.socket(socket.AF_UNIX) as sock:
             sock.settimeout(timeout)
             sock.connect(str(path))
-            sock.sendall(json.dumps(payload).encode()+b'\n')
-            response=json.loads(sock.makefile('rb').readline(1024*1024))
+            sock.sendall(json.dumps({**payload,**({'progress':True} if on_progress else {})}).encode()+b'\n')
+            deadline=time.monotonic()+timeout
+            stream=sock.makefile('rb')
+            while True:
+                sock.settimeout(max(.001,deadline-time.monotonic()))
+                response=json.loads(stream.readline(1024*1024))
+                if 'progress' not in response:break
+                if on_progress:on_progress(response['progress'])
+                if time.monotonic()>=deadline:raise TimeoutError('Browser task timed out')
     except (OSError,ValueError) as error:
         raise RuntimeError('Brave control is disconnected. Enable the Hyprash browser extension in brave://extensions.') from error
-    if response.get('error'):raise RuntimeError(response['error'])
+    if response.get('error'):raise BrowserTaskError(response['error'],response.get('trace'))
     return response.get('result',{})
 
 def cancel():

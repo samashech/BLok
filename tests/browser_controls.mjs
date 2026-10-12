@@ -1,4 +1,4 @@
-import {chromium} from '/home/samashech/Documents/Pixco/node_modules/playwright/index.mjs';
+import {chromium} from 'playwright';
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const {pageAction}=await import('data:text/javascript;base64,'+Buffer.from(await readFile(new URL('../browser-extension/page.js',import.meta.url))).toString('base64'));
@@ -8,6 +8,8 @@ try{
  await page.route('https://www.google.com/**',r=>r.fulfill({contentType:'text/html',body:`<form action="/search"><textarea name="q"></textarea><button type="submit">Google Search</button></form><div id="tads"><a href="https://example.com/ad"><h3>Sponsored first</h3></a></div><div id="search"><a href="https://example.com/normal"><h3>Normal second</h3></a></div>`}));
  await page.route('https://example.com/**',r=>r.fulfill({contentType:'text/html',body:'<h1>Selected result</h1>'}));
  await page.goto('https://www.google.com');
+ assert.equal(await page.evaluate(pageAction,{op:'search',site:'google',query:'rock and roll',prepareOnly:true}),true);
+ assert.equal(await page.locator('textarea').inputValue(),'');
  await page.evaluate(pageAction,{op:'search',site:'google',query:'rock and roll'});
  await page.waitForURL('**/search?q=rock+and+roll');
  await page.evaluate(pageAction,{op:'result',index:1});
@@ -21,6 +23,8 @@ try{
  await page.setContent('<label>Name<input></label><button onclick="this.textContent=\'Done\'">Save</button>');
  await page.evaluate(pageAction,{op:'fill',target:'Name',text:'hello'});
  assert.equal(await page.locator('input').inputValue(),'hello');
+ assert.equal(await page.evaluate(pageAction,{op:'fill',target:'Name',text:'hello',verifyOnly:true}),true);
+ assert.equal(await page.evaluate(pageAction,{op:'fill',target:'Name',text:'HELLO',verifyOnly:true}),false);
  await page.evaluate(pageAction,{op:'click',target:'Save'});
  assert.equal(await page.locator('button').textContent(),'Done');
  await page.setContent('<span id=label>Search</span><input aria-labelledby=label><button aria-label=Search>Search</button>');
@@ -30,11 +34,18 @@ try{
  await page.setContent('<button>Save</button><button>Save</button>');
  await assert.rejects(page.evaluate(pageAction,{op:'click',target:'Save'}),/More than one/);
  console.log('PASS: named controls, field verification and ambiguous match rejection');
+ await page.setContent('<button>Save</button>');
+ assert.equal((await page.evaluate(pageAction,{op:'click',target:'Save'})).verified,false);
+ await page.setContent('<label>Name<input oninput="queueMicrotask(()=>this.value=\'original\')"></label>');
+ await page.evaluate(pageAction,{op:'fill',target:'Name',text:'replacement'});
+ assert.equal(await page.evaluate(pageAction,{op:'fill',target:'Name',text:'replacement',verifyOnly:true}),false);
  await page.setContent(`<div data-testid="tracklist-row"><a href="/track/1">God's Plan</a><button aria-label="Play God's Plan" onclick="document.querySelector('#transport').setAttribute('aria-label','Pause')">Play</button></div><button id="transport" data-testid="control-button-playpause" aria-label="Play"></button><a data-testid="context-item-link">God's Plan</a>`);
  await page.evaluate(pageAction,{op:'play',query:"God's Plan"});
  assert.equal((await page.evaluate(pageAction,{op:'playing',query:"God's Plan"})).playing,true);
  console.log('PASS: matching Spotify track activation and playback-state check');
  await page.setContent(`<div data-testid="tracklist-row"><a href="/track/wrong">Unrelated song</a><a href="/artist/other">Someone else</a><button aria-label="Play unrelated">Play</button></div><div data-testid="tracklist-row"><a href="/track/baby">Baby</a><a href="/artist/justin">Justin Bieber</a><button aria-label="Play Baby" onclick="this.dataset.played='yes'">Play</button></div>`);
+ assert.equal((await page.evaluate(pageAction,{op:'play',query:'justin bieber',mode:'artist',prepareOnly:true})).track,'Baby');
+ assert.equal(await page.locator('[aria-label="Play Baby"]').getAttribute('data-played'),null);
  const selected=await page.evaluate(pageAction,{op:'play',query:'justin bieber',mode:'artist'});
  assert.equal(selected.track,'Baby');
  assert.equal(await page.locator('[aria-label="Play Baby"]').getAttribute('data-played'),'yes');

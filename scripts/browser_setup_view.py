@@ -12,7 +12,8 @@ setup_focus()
 if '--fullscreen' in sys.argv:
     run(['wtype','-k','F11']);time.sleep(.5)
 if '--navigate' in sys.argv:
-    subprocess.Popen(['brave-origin','chrome://extensions'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True);time.sleep(1.5);setup_focus()
+    control('browser_type','brave://extensions')
+    control('browser_key','enter');time.sleep(1.5);setup_focus()
 if '--click' in sys.argv:
     i=sys.argv.index('--click');x=int(sys.argv[i+1]);y=int(sys.argv[i+2])
     print(run(['hyprctl','dispatch',f'hl.dsp.cursor.move({{x={x},y={y}}})']))

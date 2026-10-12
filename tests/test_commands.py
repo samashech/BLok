@@ -82,7 +82,9 @@ class BackendTests(unittest.TestCase):
     def test_launch_uses_argument_list_and_reports_failure(self):
         with patch('hyprash.browser.request',side_effect=RuntimeError('launch failed')) as run:
             self.backend.execute(Action('url','https://google.com/search?q=hello'))
-        run.assert_called_once_with({'action':'navigate','url':'https://google.com/search?q=hello'})
+        self.assertEqual(run.call_count,1)
+        self.assertEqual(run.call_args.args,({'action':'navigate','url':'https://google.com/search?q=hello'},))
+        self.assertTrue(callable(run.call_args.kwargs['on_progress']))
         self.assertTrue(self.events[-1]['error'])
 
     def test_stale_editor_save_cannot_overwrite_new_note(self):
