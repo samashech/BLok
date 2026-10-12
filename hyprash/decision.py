@@ -65,10 +65,21 @@ class LayaDecision:
             raise ValueError("Laya returned an invalid decision score")
         return result["choice"], probability, margin
 
-    def decide(self, text):
+    def plan(self, text):
+        from hyprash.plans import Plan, proposals
+        candidates = proposals(text)
+        decisions = [self.decide(clause, proposed=action) for clause, action in candidates]
+        rejected = next((d for d in decisions if d.action is None), None)
+        if rejected:
+            return Decision(None, 'plan', rejected.probability,
+                            sum(d.elapsed_ms for d in decisions), rejected.reason + ' Nothing was run.')
+        return Decision(Plan(tuple(d.action for d in decisions)), 'plan',
+                        min(d.probability for d in decisions), sum(d.elapsed_ms for d in decisions))
+
+    def decide(self, text, proposed=None):
         self.load()
         started = time.monotonic()
-        parsed = parse(text)
+        parsed = [proposed] if proposed is not None else parse(text)
         # The grammar extracts literal arguments and shortlists valid actions.
         # Laya must accept the proposal; rejection never falls back to execution.
         if len(parsed) == 1:
