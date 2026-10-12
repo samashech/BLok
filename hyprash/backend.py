@@ -40,6 +40,9 @@ class Backend:
         self.decision_worker = None
         self.pending = 0
         self.themes = ThemeStore(DATA)
+        # Follow-up result selection is session-only. It holds tab metadata,
+        # never page text, result titles, URLs, or screen captures.
+        self.browser_context = None
 
     def emit(self, **event):
         generation=getattr(self.worker_context,"generation",None)
@@ -67,6 +70,7 @@ class Backend:
                 return
         self.planner = StreamPlanner()
         self.pending = 0
+        self.browser_context = None
         self.emit(type="activity", state="idle")
         self.emit(type="level", value=0)
         self.status("ready", "Microphone off")
@@ -292,13 +296,41 @@ class Backend:
             return False
 
     def browser_task(self, task):
+        action=task.get('action')
+        if action == 'result':
+            task={**task,'context':self.require_browser_context()}
+        else:
+            # A new browser action supersedes a prior search result list.
+            self.browser_context=None
         def progress(event):
             if event.get('status')=='running':
                 self.emit(type="activity",state="executing",message=event['message'])
         result=browser.request(task,on_progress=progress)
+        if action == 'search' and result.get('verified') and task.get('site') in ('google','youtube'):
+            context=result.get('context')
+            if context and context.get('tabId') == result.get('tabId') and context.get('url') == result.get('url'):
+                self.browser_context={**context,'created_at':time.monotonic()}
+        elif action == 'result':
+            self.browser_context=None
         self.emit(type="execution",verified=result.get('verified',False),
                   evidence=result.get('evidence',''),trace=result.get('trace',[]))
         return result['message']
+
+    def require_browser_context(self):
+        context=self.browser_context
+        if not context or time.monotonic()-context['created_at'] > 300:
+            self.browser_context=None
+            raise RuntimeError('No current search results. Search Google or YouTube, then choose a result within five minutes.')
+        observation=browser.request({'action':'inspect'},on_progress=lambda event:None)
+        if (observation.get('tabId') != context['tabId'] or observation.get('url') != context['url']):
+            self.browser_context=None
+            raise RuntimeError('Those search results are no longer current. Search again before choosing a result.')
+        return {key:context[key] for key in ('tabId','url','site','query')}
+
+    @staticmethod
+    def has_result_followup(candidates):
+        return any(action and action.kind=='web_task' and json.loads(action.value).get('action')=='result'
+                   for _,action in candidates)
 
     def start_decisions(self):
         if self.decision_worker is not None:
@@ -325,8 +357,15 @@ class Backend:
 
     def submit_decision(self, text):
         try:
-            proposals(text)
+            candidates=proposals(text)
+            # This is a read-only preflight. Execution rechecks immediately
+            # before navigation in case the active tab changes while Laya runs.
+            if self.has_result_followup(candidates):
+                self.require_browser_context()
         except ValueError as error:
+            self.emit(type="action", error=True, message=str(error))
+            return
+        except RuntimeError as error:
             self.emit(type="action", error=True, message=str(error))
             return
         self.start_decisions()

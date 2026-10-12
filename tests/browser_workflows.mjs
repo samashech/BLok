@@ -44,6 +44,8 @@ assert.deepEqual(events.filter(e=>e[0]==='op'&&!e[2]).map(e=>e[1]),['search','se
 reset();cancelSearch=true;
 await assert.rejects(run({action:'sequence',steps}),/Step 1.*Cancelled/);
 assert.ok(!events.some(e=>e[1]==='result'));
+reset('https://www.google.com/search?q=games');
+await assert.rejects(run({action:'result',index:1}),/no longer current/);
 reset('brave://newtab/');
 assert.match((await run({action:'play',site:'spotify',query:'justin bieber',mode:'artist'})).message,/Playing Baby/);
 reset('https://github.com/');

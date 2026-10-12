@@ -152,7 +152,7 @@ settles into the assistant box. Thinking orbs are integrated into the top UI.
 | Phase 1: reliable single actions | Complete | Browser observe → act → verify flow, trace output, cancellation, safer tab handling, known Google/YouTube/Spotify/GitHub workflows |
 | Phase 2: multi-step plans | Complete | Whole-command validation before side effects, sequential execution, local Laya decision per step, stop on failure/cancel |
 | Phase 3: current-screen semantic control | Implemented locally; Brave reload pending | Safer page controls, shadow-DOM discovery, stale-control protection, desktop control identity and owner-window checks |
-| Phase 4: context and recovery | Remaining | References such as “open the second one,” controlled retries, stale page/window recovery |
+| Phase 4: context and recovery | Implemented locally; Brave reload pending | Five-minute Google/YouTube result context, repeated tab/URL validation, stale-context rejection |
 | Phase 5: routines | Remaining | User-approved reusable workflows with precondition checks |
 | Phase 6: polish and measurement | Remaining | Timing metrics, cancellation refinements, physical shortcut validation, motion tied to real execution state |
 
@@ -212,21 +212,37 @@ The installed extension ping currently reports `phase1-observe-act-verify`, so
 the running Brave service has not loaded Phase 3 yet. No user tab was navigated
 solely to reload it.
 
+## Phase 4: follow-up result context
+
+Phase 4 adds safe follow-ups such as “open the second result.” A verified
+Google or YouTube search stores only the active tab id, exact search URL, site,
+query, and a monotonic timestamp. It does not store result labels, page text,
+screenshots, browser history, or any persistent record.
+
+The context expires after five minutes. Hyprash performs a read-only current
+tab inspection before the request reaches Laya and repeats it immediately
+before selecting a result. A tab switch, URL change, manual navigation, expiry,
+new browser task, Stop command, or completed result selection clears context.
+The extension independently checks the same tab and URL before navigating.
+
+Phase 4 passed 65 Python tests, extension execution tests, browser workflow
+tests, and isolated Brave browser-control tests. It deliberately does not
+retry a stale result action: it asks for a new search instead.
+
 ## Remaining work
 
 1. Activate the already tested Phase 3 extension source without disrupting
    current Brave tabs, then run a read-only live browser inspection.
 2. Improve AT-SPI support for applications that expose useful accessibility
    trees.
-3. Build Phase 4 contextual actions, such as “open the second one” and “play
-   that result,” with strict page/tab/window validation.
-4. Add safe recovery that re-observes after navigation but never blindly
-   retries clicks or playback actions.
-5. Add saved routines only after successful workflows establish reliable
+3. Extend context only where a bounded semantic target and a matching verifier
+   exist; Spotify cards, GitHub repositories, desktop controls, and generic
+   buttons still need separate designs.
+4. Add saved routines only after successful workflows establish reliable
    structure and preconditions.
-6. Improve Voxtype recognition separately from browser and desktop control.
+5. Improve Voxtype recognition separately from browser and desktop control.
    Transcription quality is distinct from Laya’s task decision quality.
-7. Measure the full command path from speech capture through action completion,
+6. Measure the full command path from speech capture through action completion,
    then refine cancellation and UI animation timing.
 
 ## Product boundary and risks

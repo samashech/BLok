@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase3-current-screen-controls'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase4-bounded-context'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
@@ -81,7 +81,8 @@ export async function run(req, progress=()=>{}) {
       let result;
       for(let i=0;i<task.steps.length;i++) {
         try {
-          result=await execute(task.steps[i]);
+          const step=result?.context?{...task.steps[i],context:result.context}:task.steps[i];
+          result=await execute(step);
           if(result.verified!==true && i<task.steps.length-1)throw Error('The previous result is unverified; remaining steps were not run.');
         }catch(error){throw Error('Step '+(i+1)+' of '+task.steps.length+' failed: '+error.message);}
       }
@@ -129,6 +130,9 @@ export async function run(req, progress=()=>{}) {
         const matched=site==='google'?u.searchParams.get('q')===task.query:site==='youtube'?u.searchParams.get('search_query')===task.query:decodeURIComponent(u.pathname).toLowerCase()==='/search/'+task.query.toLowerCase();
         return siteOf(current.url)===site && matched && await page({op:'search_ready',site,query:task.query});
       });
+      // The browser can replace its URL during form submission. Context must
+      // use the verified current tab rather than the pre-search snapshot.
+      tab=await chrome.tabs.get(tab.id);
       if(task.action==='play') {
         if(site==='youtube')return execute({action:'result',index:task.index||1,play:true});
         if(site!=='spotify')throw Error('Playback is supported on Spotify and YouTube.');
@@ -137,11 +141,16 @@ export async function run(req, progress=()=>{}) {
         await flow.verify('Confirming Spotify playback',async()=> (await page({op:'playing',query:selected.track,trackUrl:selected.trackUrl})).playing,12000);
         return confirmed('Playing '+selected.track+' on Spotify','Matching track and playing controls observed');
       }
-      return confirmed('Searched '+site+' for '+task.query,'Matching search URL and rendered results observed');
+      return confirmed('Searched '+site+' for '+task.query,'Matching search URL and rendered results observed',{
+        url:tab.url,context:{tabId:tab.id,url:tab.url,site,query:task.query}
+      });
     }
     if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
     await focus(tab);
     if(task.action==='result') {
+      if(!task.context || task.context.tabId!==tab.id || task.context.url!==tab.url) {
+        throw Error('Those search results are no longer current. Search again before choosing a result.');
+      }
       const selected=await flow.observe('Finding the requested result',()=>page({op:'result',index:task.index,resolve:true}));
       await navigate(selected.url);
       if(task.play) {

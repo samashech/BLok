@@ -13,7 +13,7 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | 1 | Observe, act once, verify; report actual progress and failures | Implemented; isolated checks and live new-tab path pass |
 | 2 | Explicit multistep plans; stop dependent steps on failure | Implemented; isolated and local-model checks pass |
 | 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Implemented locally; installed extension reload pending |
-| 4 | Bounded recovery and context-aware follow-up commands | Planned |
+| 4 | Bounded recovery and context-aware follow-up commands | Implemented locally; installed extension reload pending |
 | 5 | Reusable routines with state validation | Planned |
 | 6 | Measure latency, improve interruption and coordinate UI motion | Planned |
 
@@ -211,7 +211,64 @@ context and re-observe; do not replay a state-changing action.
 
 ## Phase 4 — Recovery and follow-up context
 
-Status: planned. Add bounded recovery for stale controls and page transitions, plus short-lived context for commands such as “open the second one.” Never retry an uncertain state-changing action blindly. Validate stale context and manual navigation cases.
+### Acceptance
+
+1. “Open the first/second result” only works after Hyprash itself has completed
+   a verified Google or YouTube search.
+2. Follow-up state is memory-only, expires after five minutes, and contains no
+   saved page contents, result titles, screenshots, or browser history.
+3. A changed tab, changed URL, expired context, manual navigation, or missing
+   context stops the request before any result navigation.
+4. The extension repeats the tab/URL validation immediately before selecting a
+   result, because the user can switch tabs while local Laya decides.
+5. Recovery may re-observe state but never retries a state-changing result
+   navigation.
+
+### Implementation
+
+- `hyprash/backend.py`: stores only `{tabId, url, site, query, created_at}`
+  after a verified Google or YouTube search. Before a result follow-up reaches
+  Laya, Hyprash performs a read-only inspection. It repeats that inspection
+  immediately before passing a result task to the extension. Context is cleared
+  after selection, on Stop, when a different browser action starts, when it
+  expires, or when tab/URL verification fails.
+- `browser-extension/background.js`: verified search results return the
+  current tab readback, not the pre-search URL. A result task must present the
+  same tab and URL context. The extension applies this check to both a separate
+  follow-up and the existing one-utterance search/result sequence.
+- `tests/test_browser_context.py`: covers metadata-only storage, successful
+  revalidation, changed tab rejection, expired context rejection, and rejection
+  before Laya when there is no current result set.
+- `tests/browser_workflows.mjs`: verifies a bare result task is rejected by the
+  extension; sequence steps receive fresh context from their verified search.
+
+### Checks run — 2026-10-13
+
+| Check | Result | What this establishes |
+| --- | --- | --- |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 65 tests | Context storage, expiry, stale-tab rejection, preflight rejection, and prior behavior |
+| `node --test tests/execution.mjs` | PASS | One-time action/cancellation guarantees remain intact |
+| `node tests/browser_workflows.mjs` | PASS | Search-to-result sequence receives verified current URL context; bare result tasks fail safely |
+| `node tests/browser_controls.mjs` | PASS, isolated Brave | Existing page-control behavior remains compatible |
+| JavaScript/Python syntax and `git diff --check` | PASS | Changed sources parse and contain no whitespace errors |
+
+### Limitations
+
+- Follow-up context currently covers Google and YouTube result lists only. It
+  does not treat Spotify song cards, GitHub repositories, desktop controls, or
+  generic buttons as interchangeable “results.”
+- A manual tab switch, navigation, or elapsed five minutes requires a new
+  search. Hyprash gives a clear failure instead of attempting to infer intent.
+- The installed extension is still running its earlier Phase 1 build. Phase 4
+  source is ready but needs the same non-disruptive unpacked-extension reload
+  before it becomes live in Brave.
+
+### Next gate
+
+Phase 5: add only explicitly approved reusable task structures. A routine must
+have a named purpose, bounded inputs, a verified starting condition, and the
+same observe/act/verify contract. Do not save arbitrary browser or desktop
+actions as routines.
 
 ## Phase 5 — Reusable routines
 
