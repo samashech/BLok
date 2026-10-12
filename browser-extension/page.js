@@ -3,8 +3,51 @@ export async function pageAction(request, captureErrors=false) {
   try {
   const visible = e => { const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'; };
   const norm = s => String(s||'').toLowerCase().replace(/[’]/g,"'").replace(/\s+/g,' ').trim();
-  const name = e => (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' ').trim() || e.getAttribute('aria-label') || (e.labels && [...e.labels].map(l=>l.innerText).join(' ')) || e.getAttribute('placeholder') || e.innerText || e.title || '';
-  const nodes = [...document.querySelectorAll('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[contenteditable="true"]')].filter(visible);
+  const name = e => (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>e.getRootNode().getElementById?.(id)?.textContent||document.getElementById(id)?.textContent||'').join(' ').trim() || e.getAttribute('aria-label') || (e.labels && [...e.labels].map(l=>l.innerText).join(' ')) || e.getAttribute('placeholder') || e.innerText || e.title || '';
+  const interactive = 'button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[role="combobox"],[contenteditable="true"]';
+  const allNodes = () => {
+    const found=[];
+    const visit=root => {
+      const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT);
+      let node;
+      while((node=walker.nextNode())) {
+        if(node.matches(interactive)) found.push(node);
+        if(node.shadowRoot) visit(node.shadowRoot);
+      }
+    };
+    visit(document);return found.filter(visible);
+  };
+  const nodes = allNodes();
+  const registry = globalThis.__hyprashControlRegistry ||= {next:0,ids:new WeakMap()};
+  const idOf = e => {
+    let id=registry.ids.get(e);
+    if(!id){id='control-'+(++registry.next);registry.ids.set(e,id);}
+    return id;
+  };
+  const roleOf = e => e.getAttribute('role') || (e.matches('a[href]')?'link':e.matches('button,input[type="button"],input[type="submit"],input[type="reset"]')?'button':e.matches('select')?'combobox':e.matches('textarea,input:not([type]),input[type="text"],input[type="search"],input[type="email"],input[type="url"],input[type="tel"],[contenteditable="true"]')?'textbox':e.matches('input[type="checkbox"]')?'checkbox':e.matches('input[type="radio"]')?'radio':e.tagName.toLowerCase());
+  const editable = e => e.matches('input:not([type="button"],[type="submit"],[type="reset"],[type="checkbox"],[type="radio"]),textarea,[contenteditable="true"]');
+  const descriptor = e => {
+    const href=e.matches('a[href]')?new URL(e.href).pathname:'';
+    const controlName=name(e).slice(0,120);
+    return {id:idOf(e),name:controlName,role:roleOf(e),editable:editable(e),disabled:!!(e.disabled||e.getAttribute('aria-disabled')==='true'),fingerprint:[roleOf(e),norm(controlName),e.tagName.toLowerCase(),e.getAttribute('type')||'',href].join('|')};
+  };
+  const page = () => location.href+'\n'+performance.timeOrigin;
+  const findTarget = request => {
+    const target=norm(request.target).replace(/^(the )/,'').replace(/ (button|link|field)$/,'');
+    const role=request.role || (/ (field|button|link)$/.exec(norm(request.target))||[])[1];
+    const eligible=request.action==='fill'||role==='field'?nodes.filter(editable):role==='button'?nodes.filter(e=>roleOf(e)==='button'):role==='link'?nodes.filter(e=>roleOf(e)==='link'):nodes;
+    let matches=eligible.filter(e=>norm(name(e))===target);
+    if(!matches.length) matches=eligible.filter(e=>norm(name(e)).includes(target));
+    if(matches.length!==1) throw Error(matches.length?'More than one control matches. Say its full label.':'No visible control named '+request.target);
+    const e=matches[0];if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
+    return e;
+  };
+  const observed = request => {
+    if(request.page!==page()) throw Error('The page changed after observation. Inspect the current screen again.');
+    const match=nodes.find(e=>descriptor(e).id===request.control?.id);
+    if(!match||descriptor(match).fingerprint!==request.control?.fingerprint) throw Error('That control changed after observation. Inspect the current screen again.');
+    return match;
+  };
   const message = text => ({message:text,url:location.href,title:document.title});
   const setValue = (e,text) => {
     if(e.matches('input[type="password"]')) throw Error('Password fields require you to type directly.');
@@ -16,7 +59,12 @@ export async function pageAction(request, captureErrors=false) {
     e.dispatchEvent(new Event('change',{bubbles:true}));
     if(norm(e.value??e.textContent)!==norm(text)) throw Error('The field did not accept the text.');
   };
-  if(request.op==='inspect') return {url:location.href,title:document.title,controls:nodes.map(e=>({name:name(e).slice(0,120),role:e.getAttribute('role')||e.tagName.toLowerCase()})).filter(e=>e.name).slice(0,120)};
+  if(request.op==='inspect') {
+    const controls=nodes.map(descriptor).filter(e=>e.name).slice(0,120);
+    const result={url:location.href,title:document.title,page:page(),controls};
+    if(request.target) result.control=descriptor(findTarget(request));
+    return result;
+  }
   if(request.op==='search') {
     const selectors=request.site==='google'?'textarea[name="q"],input[name="q"]':request.site==='youtube'?'input[name="search_query"],input#search': 'input[data-testid="search-input"],input[placeholder*="play"],input[role="searchbox"]';
     const field=[...document.querySelectorAll(selectors)].find(visible);
@@ -132,13 +180,7 @@ export async function pageAction(request, captureErrors=false) {
     return {playing:!!((pause&&same)||(cardPaused&&transportPaused)),track:track?.innerText||selected?.innerText||''};
   }
   if(request.op==='click'||request.op==='fill') {
-    const target=norm(request.target).replace(/^(the )/,'').replace(/ (button|link|field)$/,'');
-    const role=request.role || (/ (field|button|link)$/.exec(norm(request.target))||[])[1];
-    const eligible=request.op==='fill'||role==='field'?nodes.filter(e=>e.matches('input,textarea,[contenteditable="true"]')):role==='button'?nodes.filter(e=>e.matches('button,[role="button"],input[type="submit"]')):role==='link'?nodes.filter(e=>e.matches('a[href],[role="link"]')):nodes;
-    let matches=eligible.filter(e=>norm(name(e))===target);
-    if(!matches.length) matches=eligible.filter(e=>norm(name(e)).includes(target));
-    if(matches.length!==1) throw Error(matches.length?'More than one control matches. Say its full label.':'No visible control named '+request.target);
-    const e=matches[0];if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
+    const e=request.control?observed(request):findTarget(request);
     if(request.verifyOnly)return !e.matches('input[type="password"]') && String(e.value??e.textContent)===request.text;
     e.scrollIntoView({block:'center'});
     if(request.op==='fill') {setValue(e,request.text);return message('Filled '+name(e));}

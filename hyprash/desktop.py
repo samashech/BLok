@@ -55,16 +55,49 @@ def launch(name):
         raise RuntimeError('The app did not show a window. Check its startup dialog.')
     return True
 
-def control(request):
+def active_owner():
     active=json.loads(browser.run(['hyprctl','-j','activewindow']))
-    if browser.BROWSERS.fullmatch(active.get('class','')):
-        return browser.request(request)
+    return {key:active.get(key,'') for key in ('address','pid','title','class')}
+
+def _same_owner(active, expected):
+    return all(active.get(key)==expected.get(key) for key in ('address','pid','title','class'))
+
+def _accessibility(active, request):
     result=subprocess.run(['/usr/bin/python',str(ROOT/'scripts/accessibility.py')],
-        input=json.dumps({**request,'pid':active.get('pid',0)}),capture_output=True,text=True,timeout=15)
+        input=json.dumps({**request,'pid':active.get('pid',0),'window_title':active.get('title','')}),capture_output=True,text=True,timeout=15)
     try: answer=json.loads(result.stdout)
     except ValueError: raise RuntimeError('Desktop accessibility is unavailable for this app.')
     if answer.get('error'):raise RuntimeError(answer['error'])
     return answer
+
+def inspect():
+    active=active_owner()
+    if browser.BROWSERS.fullmatch(active.get('class','')):
+        raise RuntimeError('Browser controls are inspected by the browser extension.')
+    return {**_accessibility(active,{'action':'inspect'}),'owner':active}
+
+def select_control(observation, request):
+    target=str(request.get('target','')).lower().strip().removeprefix('the ')
+    target=target.removesuffix(' button').removesuffix(' link').removesuffix(' field')
+    role=request.get('role') or ('field' if str(request.get('target','')).lower().endswith(' field') else '')
+    controls=observation.get('controls',[])
+    if request.get('action')=='fill' or role=='field':controls=[c for c in controls if c.get('editable')]
+    elif role=='button':controls=[c for c in controls if 'button' in c.get('role','')]
+    elif role=='link':controls=[c for c in controls if 'link' in c.get('role','')]
+    exact=[c for c in controls if c.get('name','').lower().strip()==target]
+    matches=exact or [c for c in controls if target in c.get('name','').lower()]
+    if len(matches)!=1:
+        raise RuntimeError('More than one control matches; use its full label.' if matches else 'No visible control named '+str(request.get('target','')))
+    if matches[0].get('disabled'):raise RuntimeError('That control is disabled.')
+    return matches[0]
+
+def control(request, owner=None):
+    active=active_owner()
+    if owner is not None and not _same_owner(active, owner):
+        raise RuntimeError('The active window changed after observation. Inspect the current screen again.')
+    if browser.BROWSERS.fullmatch(active.get('class','')):
+        return browser.request(request)
+    return _accessibility(active,request)
 
 def obsidian_vault():
     path=Path.home()/'.config/obsidian/obsidian.json'

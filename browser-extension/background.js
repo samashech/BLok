@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase1-observe-act-verify'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase3-current-screen-controls'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
@@ -19,6 +19,8 @@ export async function run(req, progress=()=>{}) {
   const confirmed=(message,evidence,extra={})=>({message,verified:true,evidence,tabId:tab?.id,...extra});
   async function page(args) {
     await flow.guard();
+    const [active]=await chrome.tabs.query({active:true,currentWindow:true});
+    if(!active||active.id!==tab?.id||active.windowId!==tab.windowId)throw Error('The active tab changed. Inspect the current screen again.');
     const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:pageAction,args:[args,true]});
     const result=results[0]?.result;
     if(result?.hyprashError)throw Error(result.hyprashError);
@@ -64,8 +66,15 @@ export async function run(req, progress=()=>{}) {
   }
   async function execute(task) {
     await flow.guard();
-    if(task.action==='inspect' && sites[task.site]) {
-      await siteTab(sites[task.site]);return page({op:'inspect'});
+    if(task.action==='inspect') {
+      if(task.site&&sites[task.site])await siteTab(sites[task.site]);
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await loaded();
+      const observation=await flow.observe('Observing visible controls',()=>page({op:'inspect'}));
+      return confirmed('Observed '+observation.controls.length+' visible controls','Current tab and document observed',{
+        observation:{url:observation.url,title:observation.title,
+          controls:observation.controls.map(({name,role,editable,disabled})=>({name,role,editable,disabled}))}
+      });
     }
     if(task.action==='sequence') {
       if(!Array.isArray(task.steps)||task.steps.length<1||task.steps.length>6||task.steps.some(s=>s.action==='sequence'))throw Error('Invalid task sequence.');
@@ -144,11 +153,16 @@ export async function run(req, progress=()=>{}) {
       return confirmed((task.play?'Playing ':'Opened ')+selected.title,task.play?'Requested video URL and playing media observed':'Requested result URL loaded',{url:tab.url});
     }
     if(task.action==='fill') {
-      const result=await flow.act('Filling the requested field',()=>page({op:'fill',...task}));
-      await flow.verify('Checking the field value',()=>page({op:'fill',...task,verifyOnly:true}));
+      const observation=await flow.observe('Observing the requested field',()=>page({op:'inspect',...task}));
+      const guarded={...task,control:observation.control,page:observation.page};
+      const result=await flow.act('Filling the requested field',()=>page({op:'fill',...guarded}));
+      await flow.verify('Checking the field value',()=>page({op:'fill',...guarded,verifyOnly:true}));
       return confirmed(result.message,'Field value read back exactly');
     }
-    if(task.action==='click')return flow.act('Clicking the requested control',()=>page({op:'click',...task}));
+    if(task.action==='click') {
+      const observation=await flow.observe('Observing the requested control',()=>page({op:'inspect',...task}));
+      return flow.act('Clicking the requested control',()=>page({op:'click',...task,control:observation.control,page:observation.page}));
+    }
     return page({op:task.action,...task});
   }
   try {

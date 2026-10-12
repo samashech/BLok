@@ -207,7 +207,15 @@ class Backend:
                 if active.get('title') in ('Hyprash · Notes','Hyprash · Camera'):
                     self.emit(type="ui_control", window=active['title'], **task)
                     return True
-                message=self.browser_task(task) if browser.BROWSERS.fullmatch(active.get('class','')) else desktop.control(task)['message']
+                if browser.BROWSERS.fullmatch(active.get('class','')):
+                    message=self.browser_task(task)
+                else:
+                    observation=desktop.inspect()
+                    control=desktop.select_control(observation,task)
+                    result=desktop.control({**task,'control':control},owner=observation['owner'])
+                    self.emit(type="execution",verified=result.get('verified',False),
+                              evidence=result.get('evidence',''),trace=[])
+                    message=result['message']
             elif kind in ("address", "browser_type", "browser_key"):
                 if kind=="browser_key" and value=="new tab":self.browser_task({'action':'new_tab'})
                 else:browser.control(kind, value)

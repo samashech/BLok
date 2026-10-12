@@ -7,13 +7,14 @@ function reset(url='https://www.youtube.com/'){
  state={};events=[];tabs.clear();tabs.set(1,{id:1,windowId:1,active:true,url,status:'complete'});cancelSearch=false;playError=false;wrongPlayback=false;
 }
 globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v){Object.assign(state,v);}}},
- tabs:{async query(){return [...tabs.values()];},async get(id){return {...tabs.get(id)};},
- async update(id,changes){events.push(['update',changes]);Object.assign(tabs.get(id),changes);return {...tabs.get(id)};},
- async create(changes){events.push(['create',changes]);const t={id:tabs.size+1,windowId:1,url:'brave://newtab/',status:'complete',...changes};tabs.set(t.id,t);return {...t,url:undefined};}},
+ tabs:{async query(query={}){const all=[...tabs.values()];return query.active?all.filter(t=>t.active):all;},async get(id){return {...tabs.get(id)};},
+ async update(id,changes){events.push(['update',changes]);if(changes.active)for(const tab of tabs.values())if(tab.windowId===tabs.get(id).windowId)tab.active=false;Object.assign(tabs.get(id),changes);return {...tabs.get(id)};},
+ async create(changes){events.push(['create',changes]);if(changes.active)for(const tab of tabs.values())if(tab.windowId===1)tab.active=false;const t={id:tabs.size+1,windowId:1,url:'brave://newtab/',status:'complete',...changes};tabs.set(t.id,t);return {...t,url:undefined};}},
  windows:{async update(){}},scripting:{async executeScript({target,args:[req]}){
   events.push(['op',req.op,!!req.prepareOnly]);const tab=tabs.get(target.tabId);let result;
   if(req.prepareOnly)return [{result:true}];
-  if(req.op==='search'){
+  if(req.op==='inspect')result={url:tab.url,title:'Fixture',page:'fixture-page',controls:[{name:req.target||'Save',role:'button',editable:false,disabled:false}],control:req.target?{id:'control-1',name:req.target,role:'button',editable:false,disabled:false,fingerprint:'button|save|button||'}:undefined};
+  else if(req.op==='search'){
    tab.url=req.site==='spotify'?'https://open.spotify.com/search/'+encodeURIComponent(req.query):'https://www.youtube.com/results?search_query='+encodeURIComponent(req.query);
    if(cancelSearch)state.epoch='cancelled';result={message:'Submitted'};
   }else if(req.op==='search_ready')result=true;
@@ -22,7 +23,7 @@ globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v
   else if(req.op==='video_play'||req.op==='video_playing')result={playing:true};
   else if(req.op==='play')result=playError?{hyprashError:'The click result is uncertain'}:{track:'Baby',trackUrl:'https://open.spotify.com/track/baby'};
   else if(req.op==='playing'){assert.equal(req.trackUrl,'https://open.spotify.com/track/baby');result={playing:!wrongPlayback};}
-  else if(req.op==='click')result={message:'Clicked Save · result not verified',verified:false};
+  else if(req.op==='click'){assert.equal(req.control?.id,'control-1');assert.equal(req.control?.fingerprint,'button|save|button||');assert.equal(req.page,'fixture-page');result={message:'Clicked Save · result not verified',verified:false};}
   else if(req.op==='github_user')result={user:'fixture-user'};
   else if(req.op==='github_filter')result={message:'Filtered'};
   else if(req.op==='github_repository')result={url:'https://github.com/fixture-user/ClickyAI',title:'ClickyAI'};
@@ -72,4 +73,8 @@ reset();const progress=[];
 const verified=await run({action:'new_tab'},event=>progress.push(event));
 assert.equal(verified.verified,true);assert.ok(verified.evidence);
 assert.deepEqual(progress.filter(e=>e.status==='running').map(e=>e.kind),['act','verify']);
+reset();
+const clicked=await run({action:'click',target:'Save'});
+assert.equal(clicked.verified,false);
+assert.deepEqual(events.filter(e=>e[0]==='op').map(e=>e[1]),['inspect','click']);
 console.log('PASS: uncertain actions are not repeated; unverified steps stop; wrong playback fails; verified results carry progress and evidence');

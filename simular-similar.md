@@ -12,7 +12,7 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | --- | --- | --- |
 | 1 | Observe, act once, verify; report actual progress and failures | Implemented; isolated checks and live new-tab path pass |
 | 2 | Explicit multistep plans; stop dependent steps on failure | Implemented; isolated and local-model checks pass |
-| 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Planned |
+| 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Implemented locally; installed extension reload pending |
 | 4 | Bounded recovery and context-aware follow-up commands | Planned |
 | 5 | Reusable routines with state validation | Planned |
 | 6 | Measure latency, improve interruption and coordinate UI motion | Planned |
@@ -131,7 +131,83 @@ Phase 3: add stable, current-screen control discovery. For each supported app, c
 
 ## Phase 3 — Current-screen control discovery
 
-Status: planned. Give controls stable identifiers within an observation, preserve app/tab ownership, and select DOM or accessibility controls before considering visual targeting. Measure local visual-model feasibility on this machine; do not assume generic Linux support means Hyprland support.
+### Acceptance
+
+1. A generic control action must begin with a fresh observation of the focused
+   browser tab or desktop window.
+2. Browser and desktop controls must retain a short-lived identity and reject
+   stale, replaced, disabled, ambiguous, or wrong-window targets.
+3. Browser controls must be selected by accessible name and semantic role,
+   including controls inside open shadow roots.
+4. Desktop controls must be discovered only inside the app and window that own
+   the focused Hyprland window.
+5. A visual-control fallback must not be claimed until local feasibility and
+   safety have been validated.
+
+### Implementation
+
+- `browser-extension/page.js`: discovery now returns bounded semantic
+  descriptors: a short-lived control id, accessible name, role, editability,
+  disabled state, and a structural fingerprint. The page identity includes its
+  URL and document `performance.timeOrigin`. Generic click/fill actions accept
+  only the descriptor obtained from the immediately preceding observation.
+  Replaced controls or navigated documents return an explicit stale-control
+  error. Discovery traverses open shadow roots and uses accessible names before
+  text content.
+- `browser-extension/background.js`: generic click and fill actions observe
+  the exact target before acting. Page operations ensure the requested tab is
+  still the active tab in the same window. Public inspection output omits
+  internal ids and fingerprints, so these short-lived references do not leave
+  the extension execution path.
+- `hyprash/desktop.py` and `scripts/accessibility.py`: AT-SPI discovery is
+  restricted to the focused Hyprland window's process and title. Each control
+  includes an accessibility-tree path, name, role, editability, and enabled
+  state. The backend observes, selects one exact control, rechecks the active
+  owner tuple (address, PID, title, class), and only then requests the action.
+- `hyprash/backend.py`: desktop generic control actions now emit their verified
+  state and evidence through the existing execution event.
+- `tests/browser_controls.mjs`, `tests/browser_workflows.mjs`, and
+  `tests/test_desktop_discovery.py`: cover observation-before-action, an open
+  shadow-root button, same-label replacement rejection, exact descriptor
+  forwarding, disabled controls, and owner-window changes.
+
+### Checks run — 2026-10-13
+
+| Check | Result | What this establishes |
+| --- | --- | --- |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 61 tests | Desktop semantic selection, owner change rejection, backend observe/select/action wiring, and prior behavior |
+| `node --test tests/execution.mjs` | PASS | Phase 1 observe/act/verify behavior remains intact |
+| `node tests/browser_workflows.mjs` | PASS | Generic browser clicks first observe and pass the exact descriptor into the action |
+| `node tests/browser_controls.mjs` | PASS, isolated Brave | Open shadow-root discovery, stale replacement rejection, accessibility-name matching, and existing Google/YouTube/Spotify/GitHub fixtures |
+| `node --check` and Python compilation | PASS | Changed extension and desktop bridge sources parse successfully |
+| `git diff --check` | PASS | No whitespace errors |
+| Installed extension ping | Pending reload | The currently running extension reports `phase1-observe-act-verify`; source reports Phase 3 only after a non-disruptive extension reload |
+
+The first sandboxed Playwright launch was blocked by Brave's crashpad socket
+restriction. Re-running the identical isolated fixture outside that sandbox
+passed. This was an environment constraint, not a failing assertion.
+
+### Live observations and limits
+
+- Obsidian exposes only its top-level frame through AT-SPI on this machine. It
+  cannot yet support arbitrary in-app named-control actions. The dedicated
+  local-vault note creation path remains the supported Obsidian action.
+- Camera exposes named controls including “Take Picture,” but they reported as
+  disabled in the observed app state. Hyprash rejects them rather than sending
+  an action.
+- No visual click-by-coordinate fallback was added. The local machine has not
+  yet demonstrated a safe, reliable visual target-selection path, and semantic
+  DOM/AT-SPI controls are the safer method for the supported apps.
+- Phase 3 source has passed isolated checks but is not live in Brave until the
+  unpacked extension is reloaded. No user tabs were navigated merely to reload
+  it.
+
+### Next gate
+
+Phase 4: maintain short-lived context for validated results and tabs, so a
+follow-up such as “open the second one” can use a named, current result. On a
+manual navigation, tab switch, owner change, or stale descriptor, clear that
+context and re-observe; do not replay a state-changing action.
 
 ## Phase 4 — Recovery and follow-up context
 
