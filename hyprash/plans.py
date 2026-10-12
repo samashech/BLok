@@ -7,6 +7,10 @@ from urllib.parse import quote_plus
 from hyprash.commands import Action, START, parse
 from hyprash.workflows import workflow
 
+UNSUPPORTED_VERB = re.compile(
+    r'\b(?:delete|erase|remove|send|upload|install|uninstall|download|rename|move|copy|close|'
+    r'shut ?down|restart|reboot|format)\b', re.I)
+
 
 @dataclass(frozen=True)
 class Plan:
@@ -62,7 +66,16 @@ def proposals(text):
             candidate = re.sub(r'^(?:please |can you |could you )', '', clause, flags=re.I)
             parsed = parse(candidate)
             start = START.search(candidate)
-            if len(parsed) != 1 or (start and start.start() != 0 and not workflow(candidate)):
+            if len(parsed) != 1:
+                if UNSUPPORTED_VERB.search(candidate):
+                    raise ValueError('Unsupported step. Nothing was run.')
+                # Preserve the small, existing natural-language route. It still
+                # only permits Laya's bounded route labels in decision.py.
+                if start is None and len(chunks) == 1:
+                    result.append((restore(clause), None))
+                    break
+                raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+            if start and start.start() != 0 and not workflow(candidate):
                 raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
             action = parsed[0]
             fixed = {

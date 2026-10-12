@@ -11,7 +11,7 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | Phase | Outcome | Status |
 | --- | --- | --- |
 | 1 | Observe, act once, verify; report actual progress and failures | Implemented; isolated checks and live new-tab path pass |
-| 2 | Explicit multistep plans; stop dependent steps on failure | Planned |
+| 2 | Explicit multistep plans; stop dependent steps on failure | Implemented; isolated and local-model checks pass |
 | 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Planned |
 | 4 | Bounded recovery and context-aware follow-up commands | Planned |
 | 5 | Reusable routines with state validation | Planned |
@@ -89,7 +89,45 @@ Phase 2: represent an entire supported utterance as an explicit plan, reject uns
 
 ## Phase 2 — Multistep plans
 
-Status: planned. Build explicit plans from supported browser and desktop actions; show the current step; stop dependent actions on failure. Tests must cover mixed-app plans, unsupported middle clauses, cancellation, and quoted content. General unrestricted model-generated commands are not an acceptance criterion.
+### Acceptance
+
+1. A completed utterance is parsed and validated as one bounded plan before any desktop or browser action starts.
+2. Every proposed step must be accepted by local Laya; a rejected step means the entire plan does nothing.
+3. The worker executes in order, reports `Step N of M`, and stops after an error or cancellation.
+4. Existing destination-aware browser workflows remain single, verified executor tasks, rather than being split into fragile browser gestures.
+5. Text such as `rock and roll` and quoted note content such as `"bread and butter"` remains data, not a command boundary.
+
+### Implementation
+
+- `hyprash/plans.py`: produces immutable `Plan` objects from supported clauses. It combines known browser workflows, including YouTube search/play and GitHub repository navigation, into one tab-owned task. Unsupported clauses, including an unsafe command in the middle of an otherwise valid request, reject the entire plan before model work or actions begin. The old bounded natural-language route remains available only for a single request with no command verb; destructive or unsupported verbs are rejected before that route.
+- `hyprash/decision.py`: local Laya now accepts every proposed step before returning one plan. Its existing score and margin thresholds still apply per step; there is no execution fallback when Laya rejects a proposal.
+- `hyprash/backend.py`: one final transcript becomes one decision request. The action worker executes a `Plan` sequentially, emits the current step through the existing activity UI, checks the cancellation generation between steps, and stops later steps after a failed result. Individual actions now return a success value to make that boundary explicit.
+- `tests/test_plans.py` and `tests/test_decision.py`: cover a Notes/Obsidian mixed plan, a browser search/play transaction, unsupported middle and single clauses, quoted content, full-plan Laya acceptance, failure stop, cancellation stop, preflight rejection, and one-plan queueing.
+
+### Checks run — 2026-10-13
+
+| Check | Result | What this establishes |
+| --- | --- | --- |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 58 tests | Plan parsing, rejection, execution ordering, cancellation, and existing backend behavior |
+| `node --test tests/execution.mjs` | PASS | Browser observe/act/verify behavior remains intact |
+| `node tests/browser_workflows.mjs` | PASS | Browser sequences still remain ordered and stop on failed/unverified outcomes |
+| `node tests/browser_controls.mjs` | PASS, isolated Brave | Existing Google, YouTube, Spotify and GitHub controls remain compatible with the Phase 1 executor |
+| `.venv/bin/python scripts/check_laya.py` | PASS | All existing offline Laya intent fixtures, including Spotify, Obsidian, YouTube sequence, new-tab and GitHub repository tasks |
+| Offline local-Laya plan check | PASS | Laya accepted Notes → create-note, YouTube search, and YouTube search → second-video plans as complete plans |
+| `git diff --check` | PASS | No whitespace errors |
+
+No live multi-app plan was run for this phase because a representative Notes/Obsidian workflow would create or alter the user's personal data. The checks above use no cloud API or model service.
+
+### Remaining limits
+
+- A failed action is stopped by its explicit error/false result. Desktop actions that only return a successful accessibility call are not yet independently verified; Phase 3 must add screen/control observation for that.
+- The Laya checkpoint warns that some shipped choice temperatures are outside its expected range. Thresholds still prevent low-confidence execution, but its reported probabilities should not be treated as calibrated confidence measurements.
+- The planner deliberately supports a bounded grammar and existing workflows. It does not translate arbitrary multi-app instructions into shell commands or general computer-use actions.
+- Cancellation stops later steps but cannot reverse a side effect that completed before cancellation was observed.
+
+### Next gate
+
+Phase 3: add stable, current-screen control discovery. For each supported app, choose DOM or accessibility controls based on what is actually observable, maintain app/tab ownership, and only consider visual targeting where the local machine can support it. Test stale controls and manually changed windows before chaining a discovered control into another action.
 
 ## Phase 3 — Current-screen control discovery
 

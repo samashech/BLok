@@ -3,6 +3,7 @@ from unittest.mock import patch, Mock
 from hyprash.decision import LayaDecision, Decision
 from hyprash.backend import Backend
 from hyprash.commands import Action
+from hyprash.plans import Plan
 
 class DecisionTests(unittest.TestCase):
     def engine(self,choice,probabilities):
@@ -52,10 +53,10 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.b.pending,0)
         self.b.submit_decision.assert_not_called()
 
-    def test_multi_clause_passes_each_literal_clause_to_model(self):
+    def test_multi_clause_is_submitted_as_one_plan(self):
         self.b.transcript('open notes and create a note titled hello',True)
         self.assertEqual([c.args[0] for c in self.b.submit_decision.call_args_list],
-                         ['open notes','create a note titled hello'])
+                         ['open notes and create a note titled hello'])
         self.b.execute.assert_not_called()
 
     def test_no_parser_bypass_on_model_failure(self):
@@ -69,6 +70,12 @@ class QueueTests(unittest.TestCase):
         self.b.finish_decision({'type':'decision','decision':Decision(Action('open','notes'),'open',0.9,123)})
         self.b.enqueue_action.assert_called_once_with(Action('open','notes'))
         self.assertEqual(self.b.pending,0)
+
+    def test_model_result_queues_one_complete_plan(self):
+        self.b.pending=1
+        plan=Plan((Action('open','notes'),Action('new_note','hello')))
+        self.b.finish_decision({'type':'decision','decision':Decision(plan,'plan',0.9,123)})
+        self.b.enqueue_action.assert_called_once_with(plan)
 
     def test_typed_request_stops_concurrent_voice_turn(self):
         self.b.listening=True

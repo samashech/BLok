@@ -11,9 +11,10 @@ import threading
 import time
 import uuid
 
-from hyprash.commands import StreamPlanner, parse
+from hyprash.commands import StreamPlanner
 from hyprash import browser, desktop
 from hyprash.decision import LayaDecision
+from hyprash.plans import Plan, proposals
 from hyprash.themes import ThemeStore
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -149,7 +150,10 @@ class Backend:
                     if generation != self.generation: continue
                     self.worker_context.generation = generation
                     try:
-                        self.execute(action)
+                        if isinstance(action, Plan):
+                            self.execute_plan(action)
+                        else:
+                            self.execute(action)
                     except Exception as error:
                         self.emit(type="action", error=True, message=str(error))
                     self.events.put((generation, {"type":"action_done"}))
@@ -158,12 +162,38 @@ class Backend:
         self.actions_pending += 1
         self.action_jobs.put((self.generation,action))
 
+    def step_label(self, action):
+        if action.kind == 'web_task':
+            from hyprash.workflows import task_label
+            return task_label(json.loads(action.value))
+        labels = {'open': 'Open ', 'new_note': 'Create note ', 'title': 'Title note ',
+                  'write': 'Write note ', 'photo': 'Take photo', 'workspace': 'Switch workspace ',
+                  'address': 'Focus address bar', 'browser_type': 'Type in browser',
+                  'browser_key': 'Use browser key ', 'url': 'Open web page ',
+                  'obsidian_note': 'Create Obsidian note'}
+        return labels.get(action.kind, 'Run action ') + (action.value if action.kind in ('open', 'workspace', 'browser_key') else '')
+
+    def execute_plan(self, plan):
+        generation = self.worker_context.generation
+        total = len(plan.steps)
+        for index, action in enumerate(plan.steps, 1):
+            if generation != self.generation:
+                return False
+            self.emit(type='activity', state='executing',
+                      message=f'Step {index} of {total} · {self.step_label(action)}')
+            if not self.execute(action):
+                if generation == self.generation:
+                    self.emit(type='action', error=True,
+                              message=f'Stopped at step {index} of {total}; later steps were not run.')
+                return False
+        return True
+
     def execute(self, action):
         kind, value = action.kind, action.value
         try:
             if kind == "stop":
                 self.stop()
-                return
+                return True
             if kind == "web_task":
                 message=self.browser_task(json.loads(value))
             elif kind == "obsidian_note":
@@ -176,7 +206,7 @@ class Backend:
                 active=json.loads(browser.run(['hyprctl','-j','activewindow']))
                 if active.get('title') in ('Hyprash · Notes','Hyprash · Camera'):
                     self.emit(type="ui_control", window=active['title'], **task)
-                    return
+                    return True
                 message=self.browser_task(task) if browser.BROWSERS.fullmatch(active.get('class','')) else desktop.control(task)['message']
             elif kind in ("address", "browser_type", "browser_key"):
                 if kind=="browser_key" and value=="new tab":self.browser_task({'action':'new_tab'})
@@ -224,7 +254,7 @@ class Backend:
                         self.external_note_title=title
                         message='Saved Obsidian note · '+self.external_note_title
                     self.emit(type="action",message=message)
-                    return
+                    return True
                 self.ensure_note()
                 if kind == "new_note":
                     self.note = {"id":uuid.uuid4().hex, "title":value, "body":""}
@@ -239,17 +269,19 @@ class Backend:
                     message=desktop.control({'action':'click','target':'Take Picture'})['message']
                 else:
                     self.emit(type="camera", capture=True)
-                    return
+                    return True
             elif kind == "workspace":
                 self.run_command(["hyprctl", "dispatch", f'hl.dsp.focus({{workspace="{value}"}})'])
                 message = "Workspace " + value
             else:
-                return
+                return False
             self.emit(type="action", message=message)
+            return True
         except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
             if isinstance(error,browser.BrowserTaskError):
                 self.emit(type="execution",verified=False,trace=error.trace)
             self.emit(type="action", error=True, message=str(error))
+            return False
 
     def browser_task(self, task):
         def progress(event):
@@ -276,7 +308,7 @@ class Backend:
                 generation, text = self.decisions.get()
                 if generation != self.generation: continue
                 try:
-                    decision = model.decide(text)
+                    decision = model.plan(text)
                     self.events.put((generation, {"type":"decision", "decision":decision}))
                 except Exception as error:
                     self.events.put((generation, {"type":"decision_error", "message":str(error)}))
@@ -284,6 +316,11 @@ class Backend:
         self.decision_worker.start()
 
     def submit_decision(self, text):
+        try:
+            proposals(text)
+        except ValueError as error:
+            self.emit(type="action", error=True, message=str(error))
+            return
         self.start_decisions()
         try:
             self.decisions.put_nowait((self.generation, text))
@@ -318,16 +355,10 @@ class Backend:
             return
         normalized = text.lower().replace("dot com", ".com").replace("dot org", ".org")
         normalized = re.sub(r"\s+\.", ".", normalized)
-        available = parse(normalized, final)
-        actions = self.planner.feed(normalized, final, time.monotonic())
-        for action in actions:
-            next_offsets = [a.offset for a in available if a.offset > action.offset]
-            end = min(next_offsets) if next_offsets else len(normalized)
-            clause = normalized[action.offset:end].strip()
-            clause = re.sub(r"\s+(?:and(?: then)?|then|can you|and can you)$", "", clause)
-            self.submit_decision(clause)
-        if final and text and not actions and not available:
-            self.submit_decision(text)
+        if normalized.strip():
+            # A completed utterance has one plan. Validation happens before the
+            # local model is asked to accept its individual steps.
+            self.submit_decision(normalized)
 
     def request(self, request):
         command = request.get("command")
