@@ -31,7 +31,7 @@ cases=[
  ('delete all my files',None),
 ]
 from hyprash.commands import parse
-for phrase in ['create a note saying hello in obsidian','play a justin bieber song','play a song by adele','open a new tab','search for bbs in youtube and play the first video','search for bbs in youtube and play the second video','open github and go to my repositories and find clickyAI and open it']:
+for phrase in ['create a note saying hello in obsidian','play a justin bieber song','play a song by adele','open a new tab','search for bbs in youtube and play the first video','search for bbs in youtube and play the second video','open github and go to my repositories and find clickyAI and open it','run morning routine','start daily standup']:
     action=parse(phrase)[0]
     cases.append((phrase,(action.kind,action.value)))
 failed=[]

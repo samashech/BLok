@@ -61,4 +61,11 @@ def workflow(text):
     m=re.fullmatch(r'(?:type|enter) (.+?) (?:into (?:the )?|in the )(.+?)(?: field)?',s,re.I)
     if m:
         return 'ui_control',json.dumps({'action':'fill','target':m[2],'text':m[1]})
+    m=re.fullmatch(r'(?:run|start|execute)(?: the)? (?:routine )?([a-z0-9_ -]+?)(?: routine)?',s,re.I)
+    if m:
+        from hyprash.routines import get_routine
+        target=m[1].strip()
+        found=get_routine(target)
+        if found:
+            return 'routine',found.name
     return None

@@ -29,7 +29,7 @@ def proposals(text):
     masked = re.sub(r'"([^"\n]*)"|(?<!\w)\x27([^\x27\n]*)\x27(?!\w)', protect, text)
     if '"' in masked:
         raise ValueError('Close the quoted text before running the command.')
-    boundary = r'\s+(?:and\s+then|then)\s+|\s*;\s*|\s+and\s+(?=(?:open|create|make|write|add|take|search|play|go|visit|launch|click|select|focus|type|enter|press|hit|reload|switch|find|delete|send|upload|install|remove|close|stop|rename|download)\b)'
+    boundary = r'\s+(?:and\s+then|then)\s+|\s*;\s*|\s+and\s+(?=(?:open|create|make|write|add|take|search|play|go|visit|launch|click|select|focus|type|enter|press|hit|reload|switch|find|delete|send|upload|install|remove|close|stop|rename|download|run|start|execute)\b)'
     chunks = re.split(boundary, masked, flags=re.I)
     if any(not chunk.strip() for chunk in chunks) or len(chunks) > 8:
         raise ValueError('Use between one and eight complete steps.')
@@ -69,6 +69,8 @@ def proposals(text):
             if len(parsed) != 1:
                 if UNSUPPORTED_VERB.search(candidate):
                     raise ValueError('Unsupported step. Nothing was run.')
+                if re.search(r'\b(?:run|start|execute)\b.*\broutine\b', candidate, re.I):
+                    raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
                 # Preserve the small, existing natural-language route. It still
                 # only permits Laya's bounded route labels in decision.py.
                 if start is None and len(chunks) == 1:
@@ -86,6 +88,11 @@ def proposals(text):
             }
             if action.kind in fixed and not re.fullmatch(fixed[action.kind] + r'[.!?]*', candidate, re.I):
                 raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+            if action.kind == 'routine':
+                from hyprash.routines import get_routine
+                if not get_routine(action.value):
+                    raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
+
         value = action.value
         if action.kind in ('web_task', 'ui_control', 'obsidian_note'):
             def expand(obj):

@@ -102,6 +102,11 @@ class LayaDecision:
                 label=task_label(task)
             elif proposed.kind=='obsidian_note':
                 label='Create a note saying '+json.loads(proposed.value)['content']+' in Obsidian'
+            elif proposed.kind=='routine':
+                from hyprash.routines import get_routine
+                routine = get_routine(proposed.value)
+                name = routine.name.replace('_', ' ') if routine else proposed.value.replace('_', ' ')
+                label = f"Run the {name} routine"
             else:
                 label = labels[proposed.kind]
             # Explicit alternative prevents opening Notes from becoming a new note.

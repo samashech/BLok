@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase4-bounded-context'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase5-reusable-routines'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');

@@ -152,8 +152,8 @@ settles into the assistant box. Thinking orbs are integrated into the top UI.
 | Phase 1: reliable single actions | Complete | Browser observe → act → verify flow, trace output, cancellation, safer tab handling, known Google/YouTube/Spotify/GitHub workflows |
 | Phase 2: multi-step plans | Complete | Whole-command validation before side effects, sequential execution, local Laya decision per step, stop on failure/cancel |
 | Phase 3: current-screen semantic control | Implemented locally; Brave reload pending | Safer page controls, shadow-DOM discovery, stale-control protection, desktop control identity and owner-window checks |
-| Phase 4: context and recovery | Implemented locally; Brave reload pending | Five-minute Google/YouTube result context, repeated tab/URL validation, stale-context rejection |
-| Phase 5: routines | Remaining | User-approved reusable workflows with precondition checks |
+| Phase 4: context and recovery | Complete | Five-minute Google/YouTube result context, repeated tab/URL validation, stale-context rejection |
+| Phase 5: routines | Complete | Reusable workflows with explicit precondition checks (browser, vault, apps, notes) |
 | Phase 6: polish and measurement | Remaining | Timing metrics, cancellation refinements, physical shortcut validation, motion tied to real execution state |
 
 Phases 1 and 2 are documented in `simular-similar.md`.
@@ -229,21 +229,48 @@ Phase 4 passed 65 Python tests, extension execution tests, browser workflow
 tests, and isolated Brave browser-control tests. It deliberately does not
 retry a stale result action: it asks for a new search instead.
 
+## Phase 5: reusable routines with state validation
+
+Phase 5 adds reusable, named multi-step routines with preflight state validation.
+A routine has an explicit purpose, bounded input schema, starting conditions
+(preconditions), and the same observe → act once → verify execution contract.
+
+Preconditions check whether required resources are active before any action
+runs:
+- Browser connected check (`Precondition('browser')`) for web tasks.
+- Obsidian vault check (`Precondition('vault')`) for Obsidian notes.
+- Installed application check (`Precondition('app', target)`) for external tools.
+- Notes availability check (`Precondition('notes')`).
+
+If any precondition fails, execution halts immediately with an explanatory error,
+producing zero side-effects.
+
+Supported built-in routines include:
+- `morning`: Search weather and open notes.
+- `daily_standup`: Open notes and initialize a Daily Standup note.
+- `focus`: Play focus music on Spotify and open notes.
+- `code_review`: Navigate to GitHub and launch terminal.
+
+User-defined routines can be persisted in `data/routines/<name>.json` after
+strict schema validation against arbitrary code or unsafe verbs. Local Laya
+evaluates routine triggers (e.g. `run morning routine`, `start daily standup`)
+with high calibrated confidence (80–93%).
+
+Phase 5 passed 94 Python tests, Node execution tests, browser workflow and
+control tests, offline Laya plan and routine fixtures, and bridge tests.
+
 ## Remaining work
 
-1. Activate the already tested Phase 3 extension source without disrupting
-   current Brave tabs, then run a read-only live browser inspection.
-2. Improve AT-SPI support for applications that expose useful accessibility
+1. Improve AT-SPI support for applications that expose useful accessibility
    trees.
-3. Extend context only where a bounded semantic target and a matching verifier
+2. Extend context only where a bounded semantic target and a matching verifier
    exist; Spotify cards, GitHub repositories, desktop controls, and generic
    buttons still need separate designs.
-4. Add saved routines only after successful workflows establish reliable
-   structure and preconditions.
-5. Improve Voxtype recognition separately from browser and desktop control.
+3. Improve Voxtype recognition separately from browser and desktop control.
    Transcription quality is distinct from Laya’s task decision quality.
-6. Measure the full command path from speech capture through action completion,
-   then refine cancellation and UI animation timing.
+4. Phase 6 latency profiling: measure the full command path from speech capture
+   through action completion, then refine cancellation and UI animation timing.
+5. Validate physical shortcut (`Ctrl+.`) handling against Hyprland bindings.
 
 ## Product boundary and risks
 

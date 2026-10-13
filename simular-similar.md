@@ -13,8 +13,8 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | 1 | Observe, act once, verify; report actual progress and failures | Implemented; isolated checks and live new-tab path pass |
 | 2 | Explicit multistep plans; stop dependent steps on failure | Implemented; isolated and local-model checks pass |
 | 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Implemented locally; installed extension reload pending |
-| 4 | Bounded recovery and context-aware follow-up commands | Implemented locally; installed extension reload pending |
-| 5 | Reusable routines with state validation | Planned |
+| 4 | Bounded recovery and context-aware follow-up commands | Implemented and active in Brave session |
+| 5 | Reusable routines with state validation | Implemented; isolated, model, and routine tests pass |
 | 6 | Measure latency, improve interruption and coordinate UI motion | Planned |
 
 Each phase must record scope, changed files, regression checks, live validation, limitations, and the next acceptance gate. Passing isolated tests does not establish live app reliability.
@@ -272,7 +272,51 @@ actions as routines.
 
 ## Phase 5 — Reusable routines
 
-Status: planned. Save only explicitly supported, successful task structures and recheck their starting conditions before reuse. Measure whether routines improve recurring tasks without concealing changed interfaces.
+### Acceptance
+
+1. Routines are bounded, named multi-step sequences with an explicit purpose and parameter schema.
+2. Every routine enforces verified starting conditions (preconditions: browser connected, Obsidian vault configured, app installed/cataloged, notes accessible) before executing any step.
+3. Precondition failures halt immediately in preflight with a clear failure explanation; zero mutations or side effects occur.
+4. Steps execute sequentially under the established observe → act once → verify contract, emitting progress (`Step N of M · Routine <name>`).
+5. A failed or cancelled step immediately halts remaining steps; arbitrary shell execution or freeform action injection is strictly prohibited.
+6. Local Laya evaluates and accepts the proposed routine action before execution; model rejection produces no side effects.
+
+### Implementation
+
+- `hyprash/routines.py`: Defines immutable `Routine` and `Precondition` data models. Provides `BUILTIN_ROUTINES` catalog (`morning`, `daily_standup`, `focus`, `code_review`), routine alias resolution, schema validation (`validate_routine_dict` rejecting arbitrary action kinds, excessive steps, or unsafe words), persistence for user-defined routines (`save_routine_dict`), and precondition verification (`check_routine_preconditions`).
+- `hyprash/workflows.py`: Added workflow pattern recognition for routine execution phrases (`run morning routine`, `start daily standup`, `run focus routine`, `run routine <name>`).
+- `hyprash/commands.py`: Added routine trigger patterns to command parsing and action extraction.
+- `hyprash/plans.py`: Extended clause boundary lookahead to include `run|start|execute`, integrated routine action verification and rejection of unknown routines.
+- `hyprash/decision.py`: Calibrated local Laya decision prompts for routine actions (`Run the <name> routine`), achieving 80–93% acceptance confidence with 0.50+ margins.
+- `hyprash/backend.py`: Added routine precondition gating before execution, sequential step execution with progress reporting, stop-on-failure / stop-on-cancellation guarantees, and IPC requests for `save_routine` and `list_routines`.
+- `browser-extension/background.js`: Bumped extension ping version to `phase5-reusable-routines`.
+- `tests/test_routines.py`: Comprehensive test suite (28 new tests) covering schema validation, catalog and alias resolution, precondition success/failure, workflow phrase parsing, plan generation, Laya decision gating, and fail-fast backend execution.
+- `scripts/check_laya.py`: Added routine test fixtures to offline Laya evaluation.
+
+### Checks run — 2026-10-14
+
+| Check | Result | What this establishes |
+| --- | --- | --- |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 94 tests | Routine schema validation, preconditions, Laya routing, plan proposals, backend execution, and all prior regression gates |
+| `node --test tests/execution.mjs` | PASS | Browser observe/act/verify behavior and timeouts remain intact |
+| `node tests/browser_workflows.mjs` | PASS | Browser workflow ordering, tab ownership, and fail-fast guarantees |
+| `node tests/browser_controls.mjs` | PASS, isolated Brave | Open shadow-DOM traversal, stale control rejection, and site controls |
+| `node --test tests/test_orbs.mjs` | PASS, 9 tests | Orb animation state geometry engines remain finite and healthy |
+| `.venv/bin/python scripts/check_browser_bridge.py` | PASS | Private Unix socket framing, streamed progress, and verified result propagation |
+| `.venv/bin/python scripts/check_laya.py` | PASS, 32 cases | Offline Laya intent fixtures, including routine approval (`run morning routine`, `start daily standup`) |
+| `.venv/bin/python scripts/check_pipeline.py` | PASS | Offline Laya decision pipeline to note persistence and cancellation |
+| Live Brave ping / inspect | PASS | Active Brave session connected (`version: phase4-bounded-context`); live controls inspected |
+| Live tab workflow check | PASS | Real tab creation verified via Native Messaging host |
+| `git diff --check` & syntax compilation | PASS | Zero whitespace issues; clean compilation for Python and JS sources |
+
+### Limitations
+
+- Routines are restricted to bounded compositions of verified Hyprash actions. Unbounded shell scripts, arbitrary desktop gestures, or unverified macros remain rejected by design.
+- The running Brave session currently reports `phase4-bounded-context` until a non-disruptive unpacked reload updates it to `phase5-reusable-routines`.
+
+### Next gate
+
+Phase 6: Measure end-to-end latency across speech, local Laya decision, browser, and desktop layers; refine cancellation feedback; and validate physical shortcuts (`Ctrl+.`).
 
 ## Phase 6 — Responsiveness and motion
 

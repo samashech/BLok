@@ -170,12 +170,17 @@ class Backend:
         if action.kind == 'web_task':
             from hyprash.workflows import task_label
             return task_label(json.loads(action.value))
+        if action.kind == 'routine':
+            from hyprash.routines import get_routine
+            routine = get_routine(action.value, DATA)
+            return routine.description if routine else f"Run routine {action.value}"
         labels = {'open': 'Open ', 'new_note': 'Create note ', 'title': 'Title note ',
                   'write': 'Write note ', 'photo': 'Take photo', 'workspace': 'Switch workspace ',
                   'address': 'Focus address bar', 'browser_type': 'Type in browser',
                   'browser_key': 'Use browser key ', 'url': 'Open web page ',
                   'obsidian_note': 'Create Obsidian note'}
         return labels.get(action.kind, 'Run action ') + (action.value if action.kind in ('open', 'workspace', 'browser_key') else '')
+
 
     def execute_plan(self, plan):
         generation = self.worker_context.generation
@@ -285,6 +290,29 @@ class Backend:
             elif kind == "workspace":
                 self.run_command(["hyprctl", "dispatch", f'hl.dsp.focus({{workspace="{value}"}})'])
                 message = "Workspace " + value
+            elif kind == "routine":
+                from hyprash.routines import get_routine, check_routine_preconditions
+                routine = get_routine(value, DATA)
+                if not routine:
+                    raise RuntimeError(f"Routine '{value}' does not exist.")
+                ok, failure_reason = check_routine_preconditions(routine, self)
+                if not ok:
+                    raise RuntimeError(f"Precondition failed for routine '{routine.name}': {failure_reason}")
+                self.emit(type="activity", state="executing",
+                          message=f"Starting routine · {routine.name}")
+                total = len(routine.steps)
+                generation = getattr(self.worker_context, "generation", self.generation)
+                for index, step in enumerate(routine.steps, 1):
+                    if generation != self.generation:
+                        return False
+                    self.emit(type="activity", state="executing",
+                              message=f"Routine {routine.name} · Step {index} of {total} · {self.step_label(step)}")
+                    if not self.execute(step):
+                        if generation == self.generation:
+                            self.emit(type="action", error=True,
+                                      message=f"Routine '{routine.name}' stopped at step {index} of {total}; later steps were not run.")
+                        return False
+                message = f"Completed routine · {routine.name}"
             else:
                 return False
             self.emit(type="action", message=message)
@@ -421,6 +449,17 @@ class Backend:
         elif command == "theme":
             self.themes.select(str(request.get("name", "")))
             self.emit(type="theme", theme=self.themes.current())
+        elif command == "save_routine":
+            from hyprash.routines import save_routine_dict
+            try:
+                routine = save_routine_dict(request.get("routine", {}), DATA)
+                self.emit(type="routine_saved", routine=routine.to_dict())
+            except Exception as error:
+                self.emit(type="action", error=True, message=f"Failed to save routine: {error}")
+        elif command == "list_routines":
+            from hyprash.routines import list_routines
+            routines = list_routines(DATA)
+            self.emit(type="routines", routines=[r.to_dict() for r in routines.values()])
         elif command == "feedback":
             self.emit(type="action", message=str(request.get("message", "")))
 
