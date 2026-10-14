@@ -1,15 +1,19 @@
 """Bounded voice intents. Transcripts are never interpreted as shell code."""
 from dataclasses import dataclass
+import json
 import re
 from urllib.parse import quote_plus
+
 from hyprash.workflows import workflow
 from hyprash.desktop import catalog
+from hyprash.nlu import resolve_intent, normalize_utterance, ConversationContext, ResolvedIntent
 
 @dataclass(frozen=True)
 class Action:
     kind: str
     value: str = ""
     offset: int = 0
+
 
 APPS = {
     "browser": "browser", "arc browser": "browser", "brave": "browser",
@@ -20,9 +24,13 @@ APPS = {
     "obsidian": "obsidian", "snapshot": "snapshot",
     "camera": "camera", "photo booth": "camera", "photobooth": "camera",
 }
-SITES = {"youtube": "https://www.youtube.com", "github": "https://github.com",
-         "google": "https://www.google.com", "spotify": "https://open.spotify.com", "x": "https://x.com",
-         "twitter": "https://x.com"}
+
+SITES = {
+    "youtube": "https://www.youtube.com", "github": "https://github.com",
+    "google": "https://www.google.com", "spotify": "https://open.spotify.com",
+    "x": "https://x.com", "twitter": "https://x.com",
+}
+
 START = re.compile(
     r"\b(?:(?:go to|focus|click(?: on)?|select|open)(?: the)? (?:address|url|search) bar|type|press enter|hit enter|new tab|go back|go forward|reload(?: the page)?|look up|look online for|find online|open(?: up)?|launch|go to|visit|search(?: (?:the web|google))? for|"
     r"search|google|(?:create|make)(?: a)?(?: new)? note|new note|"
@@ -30,45 +38,58 @@ START = re.compile(
     r"(?:write|add)(?: down)?|take(?: a)? (?:picture|photo|selfie)(?: of me)?|"
     r"(?:switch to|go to) workspace|stop listening)\b", re.I)
 
-def clean(value):
+
+def clean(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" .,!?\"")
     return re.sub(r"(?:^|\s+)(?:and|then|and then|please|for me|and once.*|once.*|can you|and can you)$", "", value).strip()
 
-def parse(text, final=True):
-    text = text.lower().replace("dot com", ".com").replace("dot org", ".org")
-    text = re.sub(r"\s+\.", ".", text)
+
+def parse(text: str, final: bool = True, context: ConversationContext | None = None) -> list[Action]:
+    text_clean = text.lower().replace("dot com", ".com").replace("dot org", ".org")
+    text_clean = re.sub(r"\s+\.", ".", text_clean)
+
     # Never reinterpret negated or quoted requests as affirmative commands.
-    if re.search(r"\b(?:don't|do not|never|cancel|actually|instead)\b", text):
+    if re.search(r"\b(?:don't|do not|never|cancel|actually|instead)\b", text_clean):
         return []
-    complete=workflow(text) if final else None
-    if complete:
-        return [Action(*complete)]
+
+    # Check complete workflow if final
+    if final:
+        complete = workflow(text)
+        if complete:
+            return [Action(*complete)]
+
     matches = []
-    for candidate in START.finditer(text):
+    for candidate in START.finditer(text_clean):
         # Command words inside dictated content ("write open source software")
         # are data unless introduced by an explicit clause boundary.
-        if not matches or re.search(r"(?:[.!?]\s*|\b(?:and(?: then)?|then|can you|could you|please|let's|lets)\s+)$", text[:candidate.start()]):
+        if not matches or re.search(r"(?:[.!?]\s*|\b(?:and(?: then)?|then|can you|could you|please|let's|lets)\s+)$", text_clean[:candidate.start()]):
             matches.append(candidate)
+
+    if final and not matches:
+        # Fallback to NLU Tier 1 for conversational variations not matching rigid START keywords
+        resolved = resolve_intent(text, context)
+        if resolved.confidence >= 0.85 and resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify"):
+            return [Action(resolved.action_kind, resolved.action_value)]
+
     result = []
     for i, match in enumerate(matches):
         verb = match.group().lower()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        arg = clean(text[match.end():end])
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text_clean)
+        arg = clean(text_clean[match.end():end])
         closed = final or i + 1 < len(matches)
         action = None
         if verb.endswith("search bar"):
-            import json
-            action = Action("ui_control", json.dumps({'action':'click','target':'Search','role':'field'}))
+            action = Action("ui_control", json.dumps({'action': 'click', 'target': 'Search', 'role': 'field'}))
         elif verb.endswith(" bar"):
             action = Action("address")
         elif verb == "type" and closed and arg:
             action = Action("browser_type", arg)
         elif verb in ("press enter", "hit enter", "new tab", "go back", "go forward", "reload", "reload the page"):
-            action = Action("browser_key", {"press enter":"enter", "hit enter":"enter", "go back":"back", "go forward":"forward", "reload the page":"reload"}.get(verb, verb))
+            action = Action("browser_key", {"press enter": "enter", "hit enter": "enter", "go back": "back", "go forward": "forward", "reload the page": "reload"}.get(verb, verb))
         elif verb == "stop listening":
             action = Action("stop")
         elif "workspace" in verb and closed:
-            number = {"one":"1", "two":"2", "three":"3", "four":"4", "five":"5", "six":"6", "seven":"7", "eight":"8", "nine":"9", "ten":"10"}.get(arg, arg)
+            number = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}.get(arg, arg)
             if number.isdigit() and 1 <= int(number) <= 10:
                 action = Action("workspace", number)
         elif verb.startswith(("open", "launch", "go to", "visit")):
@@ -97,6 +118,7 @@ def parse(text, final=True):
             result.append(Action(action.kind, action.value, match.start()))
     return result
 
+
 class StreamPlanner:
     """Require a stable partial, and execute each intent once per utterance."""
     def __init__(self):
@@ -113,7 +135,7 @@ class StreamPlanner:
                 self.done.add(key)
                 ready.append(action)
         active = {((a.offset, a.kind), a.value) for a in parse(text, final)}
-        self.candidates = {k:v for k,v in self.candidates.items() if k in active}
+        self.candidates = {k: v for k, v in self.candidates.items() if k in active}
         if final:
             self.done.clear()
             self.candidates.clear()

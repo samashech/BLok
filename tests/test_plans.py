@@ -4,7 +4,7 @@ from unittest.mock import Mock
 from hyprash.backend import Backend
 from hyprash.commands import Action
 from hyprash.decision import LayaDecision
-from hyprash.plans import Plan, proposals
+from hyprash.plans import Plan, proposals, PlanStep
 
 
 class ProposalTests(unittest.TestCase):
@@ -71,6 +71,68 @@ class ExecutionTests(unittest.TestCase):
         self.backend.start_decisions.assert_not_called()
         self.assertTrue(any(call.kwargs.get('error') and 'Nothing was run' in call.kwargs.get('message', '')
                             for call in self.backend.emit.call_args_list))
+
+    def test_dag_abort_dependent_allows_independent_workflow_to_proceed(self):
+        step1 = PlanStep(kind='web_task', value='{"action":"play","site":"youtube","query":"despacito"}',
+                         step_id='step_1', target_domain='browser:youtube',
+                         on_failure='ABORT_DEPENDENT')
+        step2 = PlanStep(kind='web_task', value='{"action":"play","site":"spotify","query":"baby"}',
+                         step_id='step_2', target_domain='browser:spotify',
+                         on_failure='ABORT_DEPENDENT')
+        plan = Plan((step1, step2))
+
+        # step 1 fails, step 2 succeeds
+        self.backend.execute = Mock(side_effect=[False, True])
+        result = self.backend.execute_plan(plan)
+        self.assertFalse(result)
+        self.assertEqual(self.backend.execute.call_count, 2)
+        report = self.backend.last_execution_report
+        self.assertIsNotNone(report)
+        self.assertEqual(report.failed_steps, [{'step_id': 'step_1', 'stage': 'act'}])
+        self.assertEqual(report.completed_steps, ['step_2'])
+        self.assertEqual(report.overall_status, 'partial_failure')
+
+    def test_dag_dependent_step_is_skipped_when_predecessor_fails(self):
+        step1 = PlanStep(kind='web_task', value='{"action":"new_tab"}',
+                         step_id='step_1', target_domain='browser:tab',
+                         on_failure='ABORT_DEPENDENT')
+        step2 = PlanStep(kind='web_task', value='{"action":"search","site":"google","query":"hyprland"}',
+                         step_id='step_2', target_domain='browser:tab',
+                         depends_on=('step_1',), on_failure='ABORT_DEPENDENT')
+        step3 = PlanStep(kind='open', value='notes',
+                         step_id='step_3', target_domain='desktop:notes',
+                         on_failure='ABORT_DEPENDENT')
+        plan = Plan((step1, step2, step3))
+
+        # step 1 fails; step 2 depends on step 1 (skipped); step 3 is independent (executed)
+        self.backend.execute = Mock(side_effect=[False, True])
+        result = self.backend.execute_plan(plan)
+        self.assertFalse(result)
+        self.assertEqual(self.backend.execute.call_count, 2)
+        report = self.backend.last_execution_report
+        self.assertEqual(report.skipped_steps, ['step_2'])
+        self.assertEqual(report.completed_steps, ['step_3'])
+
+    def test_tab_id_binding_propagates_between_steps(self):
+        step1 = PlanStep(kind='web_task', value='{"action":"new_tab"}',
+                         step_id='step_1', target_domain='browser:tab',
+                         output_binding='tab_id')
+        step2 = PlanStep(kind='web_task', value='{"action":"search","site":"google","query":"hyprland"}',
+                         step_id='step_2', target_domain='browser:google',
+                         input_bindings=(('target_tab_id', 'step_1.tab_id'),))
+        plan = Plan((step1, step2))
+
+        executed_actions = []
+        def mock_exec(act):
+            executed_actions.append(act)
+            if act.kind == 'web_task' and 'new_tab' in act.value:
+                self.backend.context.update_tab(108)
+            return True
+
+        self.backend.execute = Mock(side_effect=mock_exec)
+        self.assertTrue(self.backend.execute_plan(plan))
+        self.assertEqual(len(executed_actions), 2)
+        self.assertEqual(executed_actions[1].target_tab_id, 108)
 
 
 if __name__ == '__main__':

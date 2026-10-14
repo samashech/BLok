@@ -25,8 +25,8 @@ ShellRoot {
     property var lastExecution: ({})
     property bool reducedMotion: Quickshell.env("HYPRASH_REDUCED_MOTION") === "1"
     property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError
-    property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? (activity === "executing" ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
-    property string headline: engine.indexOf("loading") !== -1 ? "Loading Laya…" : state === "error" ? "Needs attention" : busy ? (activity === "executing" ? "On it." : activity === "transcribing" ? "Transcribing…" : "Thinking…") : state === "loading" ? "Getting ready…" : listening ? "I’m listening." : "Ready to listen."
+    property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
+    property string headline: engine.indexOf("loading") !== -1 ? "Loading Laya…" : state === "error" ? "Needs attention" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "On it." : activity === "transcribing" ? "Transcribing…" : "Thinking…") : state === "loading" ? "Getting ready…" : listening ? "I’m listening." : "Ready to listen."
     property var theme: ({
   "id": "omarchy", "name": "Omarchy", "followDesktop": true,
   "radius": 2, "controlRadius": 2, "font": "Adwaita Mono", "mode": "dark",

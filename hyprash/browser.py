@@ -76,3 +76,10 @@ def request(payload, timeout=48, on_progress=None):
 def cancel():
     try: request({'action':'cancel'},timeout=1)
     except RuntimeError: pass
+
+def ping():
+    try:
+        res = request({'action': 'ping'}, timeout=3)
+        return {'connected': True, 'version': res.get('version', 'unknown'), 'message': res.get('message', '')}
+    except Exception as e:
+        return {'connected': False, 'version': 'disconnected', 'error': str(e)}

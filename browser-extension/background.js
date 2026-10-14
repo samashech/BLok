@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase5-reusable-routines'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase6-v1'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
@@ -53,12 +53,31 @@ export async function run(req, progress=()=>{}) {
       return sameDestination(tab.url,url);
     });
   }
-  async function siteTab(url) {
+  const isBlankOrNewTab=u=>!u||u==='about:blank'||u==='chrome://newtab/'||u==='brave://newtab/';
+  async function siteTab(url, targetTabId) {
+    if(targetTabId) {
+      try {
+        const t=await chrome.tabs.get(targetTabId);
+        if(t) {
+          tab=t;await focus(tab);
+          if(isBlankOrNewTab(tab.url)) {
+            await navigate(url);return;
+          }
+        }
+      } catch(e) {
+        throw Error('The targeted tab '+targetTabId+' was closed or no longer exists.');
+      }
+    }
     const host=new URL(url).hostname;
     const candidates=await chrome.tabs.query({currentWindow:true});
     const matching=t=>{try{return new URL(t.url).hostname===host;}catch{return false;}};
+    const activeTab=candidates.find(t=>t.active);
     const existing=candidates.find(t=>t.active&&matching(t))||candidates.find(matching);
     if(existing)await focus(existing);
+    else if((tab && tab.active && isBlankOrNewTab(tab.url)) || (activeTab && isBlankOrNewTab(activeTab.url))) {
+      tab = (tab && tab.active && isBlankOrNewTab(tab.url)) ? tab : activeTab;
+      await navigate(url);
+    }
     else await flow.act('Opening a browser tab',async()=>{
       tab={...await chrome.tabs.create({url,active:true}),url};
       await chrome.windows.update(tab.windowId,{focused:true});
@@ -67,12 +86,12 @@ export async function run(req, progress=()=>{}) {
   async function execute(task) {
     await flow.guard();
     if(task.action==='inspect') {
-      if(task.site&&sites[task.site])await siteTab(sites[task.site]);
+      if(task.site&&sites[task.site])await siteTab(sites[task.site], task.target_tab_id);
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       await loaded();
       const observation=await flow.observe('Observing visible controls',()=>page({op:'inspect'}));
       return confirmed('Observed '+observation.controls.length+' visible controls','Current tab and document observed',{
-        observation:{url:observation.url,title:observation.title,
+        tab_id:tab.id,tabId:tab.id,observation:{url:observation.url,title:observation.title,
           controls:observation.controls.map(({name,role,editable,disabled})=>({name,role,editable,disabled}))}
       });
     }
@@ -81,7 +100,9 @@ export async function run(req, progress=()=>{}) {
       let result;
       for(let i=0;i<task.steps.length;i++) {
         try {
-          const step=result?.context?{...task.steps[i],context:result.context}:task.steps[i];
+          let step=task.steps[i];
+          if(result?.context) step={...step,context:result.context};
+          if((result?.tab_id || result?.tabId) && !step.target_tab_id) step={target_tab_id:result.tab_id||result.tabId,...step};
           result=await execute(step);
           if(result.verified!==true && i<task.steps.length-1)throw Error('The previous result is unverified; remaining steps were not run.');
         }catch(error){throw Error('Step '+(i+1)+' of '+task.steps.length+' failed: '+error.message);}
@@ -96,7 +117,13 @@ export async function run(req, progress=()=>{}) {
       await flow.verify('Checking the new tab',async()=>{
         tab=await chrome.tabs.get(tab.id);return tab.active;
       });
-      return confirmed('Opened a new tab','Created tab exists and is active');
+      return confirmed('Opened a new tab','Created tab exists and is active',{
+        tab_id:tab.id,
+        tabId:tab.id,
+        url:tab.url,
+        status:tab.status,
+        active:true
+      });
     }
     if(task.action==='github_repo') {
       await siteTab('https://github.com/');await loaded();
@@ -112,9 +139,9 @@ export async function run(req, progress=()=>{}) {
       const site=task.site||siteOf(tab?.url)||'google';
       const url=task.action==='navigate'?task.url:sites[site];
       if(!url||!/^https?:\/\//.test(url))throw Error('Only supported web destinations can be searched.');
-      await siteTab(url);
+      await siteTab(url, task.target_tab_id);
       if(task.action==='navigate') {
-        await navigate(url);return confirmed('Opened '+new URL(tab.url).hostname,'Requested destination URL loaded',{url:tab.url});
+        await navigate(url);return confirmed('Opened '+new URL(tab.url).hostname,'Requested destination URL loaded',{url:tab.url,tab_id:tab.id,tabId:tab.id});
       }
       if(site==='spotify') {
         const destination=sites.spotify+'/'+encodeURIComponent(task.query);
@@ -134,16 +161,26 @@ export async function run(req, progress=()=>{}) {
       // use the verified current tab rather than the pre-search snapshot.
       tab=await chrome.tabs.get(tab.id);
       if(task.action==='play') {
-        if(site==='youtube')return execute({action:'result',index:task.index||1,play:true});
+        if(site==='youtube')return execute({action:'result',index:task.index||1,play:true,target_tab_id:tab.id});
         if(site!=='spotify')throw Error('Playback is supported on Spotify and YouTube.');
         await flow.observe('Finding a playable Spotify song',()=>page({op:'play',query:task.query,mode:task.mode,prepareOnly:true}));
         const selected=await flow.act('Starting Spotify playback',()=>page({op:'play',query:task.query,mode:task.mode}));
         await flow.verify('Confirming Spotify playback',async()=> (await page({op:'playing',query:selected.track,trackUrl:selected.trackUrl})).playing,12000);
-        return confirmed('Playing '+selected.track+' on Spotify','Matching track and playing controls observed');
+        return confirmed('Playing '+selected.track+' on Spotify','Matching track and playing controls observed',{url:tab.url,tab_id:tab.id,tabId:tab.id});
       }
       return confirmed('Searched '+site+' for '+task.query,'Matching search URL and rendered results observed',{
-        url:tab.url,context:{tabId:tab.id,url:tab.url,site,query:task.query}
+        url:tab.url,tab_id:tab.id,tabId:tab.id,context:{tabId:tab.id,url:tab.url,site,query:task.query}
       });
+    }
+    if(task.action==='next_track') {
+      const site='spotify';
+      const url=sites.spotify;
+      await siteTab(url, task.target_tab_id);
+      await loaded();
+      await flow.observe('Observing Spotify playback controls',()=>page({op:'spotify_controls_ready'}));
+      const result=await flow.act('Skipping to next track on Spotify',()=>page({op:'next_track'}));
+      await flow.verify('Confirming Spotify playback',async()=> (await page({op:'playing',query:result.track||''})).playing, 10000);
+      return confirmed('Playing next track on Spotify','Skipped to next track and verified playback',{url:tab.url,tab_id:tab.id,tabId:tab.id,track:result.track});
     }
     if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
     await focus(tab);
@@ -157,9 +194,15 @@ export async function run(req, progress=()=>{}) {
         if(siteOf(tab.url)!=='youtube')throw Error('This result is not a YouTube video.');
         await flow.observe('Waiting for the video player',()=>page({op:'video_ready'}));
         await flow.act('Starting the video',()=>page({op:'video_play'}));
-        await flow.verify('Confirming video playback',async()=> (await page({op:'video_playing'})).playing);
+        try {
+          await flow.verify('Confirming video playback',async()=> (await page({op:'video_playing'})).playing);
+        } catch(verifyError) {
+          return confirmed('Found results for '+(selected.title||task.context?.query||'video')+' on YouTube, but playback could not be verified',
+            'Requested video URL loaded; playback unverified',
+            {url:tab.url,tab_id:tab.id,tabId:tab.id,playback_verified:false,partial_success:true});
+        }
       }
-      return confirmed((task.play?'Playing ':'Opened ')+selected.title,task.play?'Requested video URL and playing media observed':'Requested result URL loaded',{url:tab.url});
+      return confirmed((task.play?'Playing ':'Opened ')+selected.title,task.play?'Requested video URL and playing media observed':'Requested result URL loaded',{url:tab.url,tab_id:tab.id,tabId:tab.id,playback_verified:true});
     }
     if(task.action==='fill') {
       const observation=await flow.observe('Observing the requested field',()=>page({op:'inspect',...task}));

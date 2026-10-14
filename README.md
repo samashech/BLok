@@ -100,6 +100,7 @@ Browser execution separates readiness observations, one-time actions, and outcom
 
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python scripts/check_latency.py  # monotonic latency profiler across all pipeline stages
 .venv/bin/python scripts/check_laya.py     # real model, offline; no desktop effects
 .venv/bin/python scripts/check_pipeline.py # real model → persisted notes; cancellation
 npm ci                                  # project-local browser test dependency
@@ -112,7 +113,7 @@ node --test tests/test_orbs.mjs            # all 9 original animation states
 .venv/bin/python scripts/check_voxtype.py --browser # real browser address-bar check
 python3 scripts/check_motion.py           # captures small top-center screenshots
 ./hyprash.sh foreground
-./hyprash.sh text 'create a note titled hello'
+./hyprash.sh text 'can you please open a new tab and search for games'
 ```
 
 Live browser checks are opt-in: `scripts/check_browser_live.py` navigates your actual tabs; passing `spotify` starts playback. `scripts/check_desktop_live.py` opens installed apps and inspects controls.

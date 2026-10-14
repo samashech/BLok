@@ -24,5 +24,5 @@ else:
     with lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         if not held.exists():raise SystemExit(0)
-        held.unlink()
+        held.unlink(missing_ok=True)
         ipc('finishRecording')

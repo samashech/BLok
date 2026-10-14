@@ -179,6 +179,21 @@ export async function pageAction(request, captureErrors=false) {
     const transportPaused=nodes.some(e=>e.matches('button') && norm(name(e))==='pause');
     return {playing:!!((pause&&same)||(cardPaused&&transportPaused)),track:track?.innerText||selected?.innerText||''};
   }
+  if(request.op==='spotify_controls_ready') {
+    const nextBtn=document.querySelector('button[aria-label="Next"],button[data-testid="control-button-skip-forward"],button[aria-label="Next track"]');
+    if(!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled')==='true') {
+      throw Error('Spotify playback controls are not available or disabled.');
+    }
+    return true;
+  }
+  if(request.op==='next_track') {
+    const nextBtn=document.querySelector('button[aria-label="Next"],button[data-testid="control-button-skip-forward"],button[aria-label="Next track"]');
+    if(!nextBtn || nextBtn.disabled || nextBtn.getAttribute('aria-disabled')==='true') {
+      throw Error('Spotify playback controls are not available or disabled.');
+    }
+    nextBtn.click();
+    return message('Skipped to next track');
+  }
   if(request.op==='click'||request.op==='fill') {
     const e=request.control?observed(request):findTarget(request);
     if(request.verifyOnly)return !e.matches('input[type="password"]') && String(e.value??e.textContent)===request.text;

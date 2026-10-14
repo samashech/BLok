@@ -16,6 +16,8 @@ from hyprash import browser, desktop
 from hyprash.decision import LayaDecision
 from hyprash.plans import Plan, proposals
 from hyprash.themes import ThemeStore
+from hyprash.nlu import ConversationContext, resolve_intent, normalize_utterance
+from hyprash.diagnostics import StageTimer, record_trace, get_diagnostics_summary
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("HYPRASH_DATA", ROOT / "data"))
@@ -43,6 +45,9 @@ class Backend:
         # Follow-up result selection is session-only. It holds tab metadata,
         # never page text, result titles, URLs, or screen captures.
         self.browser_context = None
+        from hyprash.nlu import ConversationContext
+        self.context = ConversationContext()
+        self.last_execution_report = None
 
     def emit(self, **event):
         generation=getattr(self.worker_context,"generation",None)
@@ -71,6 +76,7 @@ class Backend:
         self.planner = StreamPlanner()
         self.pending = 0
         self.browser_context = None
+        self.context.clear_search_context()
         self.emit(type="activity", state="idle")
         self.emit(type="level", value=0)
         self.status("ready", "Microphone off")
@@ -183,18 +189,102 @@ class Backend:
 
 
     def execute_plan(self, plan):
-        generation = self.worker_context.generation
+        from hyprash.plans import PlanExecutionReport
+        generation = getattr(self.worker_context, "generation", self.generation)
         total = len(plan.steps)
+        failed_step_ids = set()
+        completed_step_ids = []
+        skipped_step_ids = []
+        step_outputs = {}
+
         for index, action in enumerate(plan.steps, 1):
             if generation != self.generation:
+                self.emit(type='activity', state='cancelled', message='Plan cancelled.')
+                self.last_execution_report = PlanExecutionReport(
+                    completed_steps=completed_step_ids,
+                    failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
+                    skipped_steps=skipped_step_ids,
+                    overall_status="cancelled"
+                )
                 return False
-            self.emit(type='activity', state='executing',
-                      message=f'Step {index} of {total} · {self.step_label(action)}')
-            if not self.execute(action):
-                if generation == self.generation:
-                    self.emit(type='action', error=True,
-                              message=f'Stopped at step {index} of {total}; later steps were not run.')
-                return False
+
+            # Check dependencies: if any predecessor failed, skip this step
+            failed_deps = [d for d in getattr(action, 'depends_on', ()) if d in failed_step_ids]
+            if failed_deps:
+                sid = getattr(action, 'step_id', f'step_{index}')
+                failed_step_ids.add(sid)
+                skipped_step_ids.append(sid)
+                self.emit(type='activity', state='executing',
+                          message=f'Step {index} of {total} · Skipped {self.step_label(action)} (predecessor failed)')
+                continue
+
+            target_step = action
+            input_binds = getattr(action, 'input_bindings_dict', {})
+            if input_binds:
+                for param, bind_key in input_binds.items():
+                    if bind_key in step_outputs:
+                        if param == "target_tab_id":
+                            from dataclasses import replace
+                            target_step = replace(action, target_tab_id=step_outputs[bind_key])
+
+            self.emit(type='activity', state='step_started',
+                      message=f'Step {index} of {total} · {self.step_label(target_step)}')
+            self.emit(type='activity', state='acting',
+                      message=f'Step {index} of {total} · {self.step_label(target_step)}')
+
+            if not self.execute(target_step):
+                sid = getattr(action, 'step_id', f'step_{index}')
+                failed_step_ids.add(sid)
+                # Determine if remaining steps can proceed
+                remaining_steps = plan.steps[index:]
+                can_continue = False
+                if getattr(action, 'on_failure', 'ABORT_ALL') == 'ABORT_DEPENDENT' and remaining_steps:
+                    independent_remaining = [
+                        s for s in remaining_steps
+                        if not any(d in failed_step_ids for d in getattr(s, 'depends_on', ()))
+                        and getattr(s, 'target_domain', 'general') != getattr(action, 'target_domain', 'general')
+                    ]
+                    if independent_remaining:
+                        can_continue = True
+
+                if not can_continue:
+                    if generation == self.generation:
+                        self.emit(type='action', error=True,
+                                  message=f'Stopped at step {index} of {total}; later steps were not run.')
+                        self.emit(type='activity', state='failed',
+                                  message=f'Stopped at step {index} of {total}')
+                    self.last_execution_report = PlanExecutionReport(
+                        completed_steps=completed_step_ids,
+                        failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
+                        skipped_steps=skipped_step_ids,
+                        overall_status="failed"
+                    )
+                    return False
+            else:
+                sid = getattr(action, 'step_id', f'step_{index}')
+                completed_step_ids.append(sid)
+                if getattr(action, 'output_binding', None) == "tab_id":
+                    tab_id = self.context.active_tab_id or (self.browser_context and self.browser_context.get('tabId'))
+                    if tab_id:
+                        step_outputs[f"{getattr(action, 'step_id', f'step_{index}')}.tab_id"] = tab_id
+
+        if failed_step_ids:
+            self.emit(type='activity', state='failed', message='Plan finished with partial failures.')
+            self.last_execution_report = PlanExecutionReport(
+                completed_steps=completed_step_ids,
+                failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
+                skipped_steps=skipped_step_ids,
+                overall_status="partial_failure"
+            )
+            return False
+
+        self.emit(type='activity', state='succeeded', message='Plan completed successfully.')
+        self.last_execution_report = PlanExecutionReport(
+            completed_steps=completed_step_ids,
+            failed_steps=[],
+            skipped_steps=[],
+            overall_status="completed"
+        )
         return True
 
     def execute(self, action):
@@ -204,7 +294,10 @@ class Backend:
                 self.stop()
                 return True
             if kind == "web_task":
-                message=self.browser_task(json.loads(value))
+                task_data = json.loads(value)
+                if getattr(action, "target_tab_id", None):
+                    task_data["target_tab_id"] = action.target_tab_id
+                message=self.browser_task(task_data)
             elif kind == "obsidian_note":
                 title=desktop.create_obsidian_note(json.loads(value)['content'])
                 self.notes_target="obsidian"
@@ -331,15 +424,21 @@ class Backend:
             # A new browser action supersedes a prior search result list.
             self.browser_context=None
         def progress(event):
-            if event.get('status')=='running':
-                self.emit(type="activity",state="executing",message=event['message'])
+            if event.get('status') == 'running':
+                self.emit(type="activity", state="executing", message=event['message'])
         result=browser.request(task,on_progress=progress)
+        if action == 'new_tab' and result.get('verified'):
+            tab_id = result.get('tab_id') or result.get('tabId')
+            if tab_id:
+                self.context.update_tab(tab_id, url=result.get('url'))
         if action == 'search' and result.get('verified') and task.get('site') in ('google','youtube'):
             context=result.get('context')
-            if context and context.get('tabId') == result.get('tabId') and context.get('url') == result.get('url'):
+            if context and (context.get('tabId') == result.get('tabId') or context.get('tab_id') == result.get('tab_id')) and context.get('url') == result.get('url'):
                 self.browser_context={**context,'created_at':time.monotonic()}
+                self.context.set_search_context(result.get('tabId') or result.get('tab_id'), result.get('url'), task.get('site'), task.get('query'))
         elif action == 'result':
             self.browser_context=None
+            self.context.clear_search_context()
         self.emit(type="execution",verified=result.get('verified',False),
                   evidence=result.get('evidence',''),trace=result.get('trace',[]))
         return result['message']
@@ -348,10 +447,12 @@ class Backend:
         context=self.browser_context
         if not context or time.monotonic()-context['created_at'] > 300:
             self.browser_context=None
+            self.context.clear_search_context()
             raise RuntimeError('No current search results. Search Google or YouTube, then choose a result within five minutes.')
         observation=browser.request({'action':'inspect'},on_progress=lambda event:None)
         if (observation.get('tabId') != context['tabId'] or observation.get('url') != context['url']):
             self.browser_context=None
+            self.context.clear_search_context()
             raise RuntimeError('Those search results are no longer current. Search again before choosing a result.')
         return {key:context[key] for key in ('tabId','url','site','query')}
 
@@ -371,34 +472,73 @@ class Backend:
                 self.events.put((None, {"internal":"engine", "message":"Laya · local CPU · offline"}))
             except Exception as error:
                 self.events.put((None, {"internal":"engine", "message":"Laya unavailable: " + str(error)}))
-                # Requests will get an explicit error; there is no silent regex bypass.
             while True:
-                generation, text = self.decisions.get()
+                item = self.decisions.get()
+                generation = item[0]
+                text = item[1]
+                timer = item[2] if len(item) > 2 else None
+                intent = item[3] if len(item) > 3 else None
                 if generation != self.generation: continue
                 try:
+                    t_inf = time.monotonic_ns()
                     decision = model.plan(text)
-                    self.events.put((generation, {"type":"decision", "decision":decision}))
+                    inf_ms = (time.monotonic_ns() - t_inf) / 1_000_000.0
+                    if timer:
+                        timer.record_stage('laya_inference_ms', inf_ms)
+                    self.events.put((generation, {"type":"decision", "decision":decision, "timer":timer, "intent":intent}))
                 except Exception as error:
-                    self.events.put((generation, {"type":"decision_error", "message":str(error)}))
+                    self.events.put((generation, {"type":"decision_error", "message":str(error), "timer":timer, "intent":intent}))
         self.decision_worker = threading.Thread(target=work, daemon=True)
         self.decision_worker.start()
 
     def submit_decision(self, text):
+        timer = StageTimer()
+        with timer.measure('nlu_normalize_ms'):
+            intent = resolve_intent(text, self.context)
+
+        if intent.intent_type == "cancel":
+            self.emit(type="action", message="Request cancelled; no action taken")
+            record_trace(text, intent.normalized_text, "rule", "cancel", 1.0, [], "cancelled", timer.finish())
+            return
+        if intent.intent_type == "unsupported":
+            self.emit(type="action", error=True, message=intent.ambiguity_reason or "Unsupported step. Nothing was run.")
+            record_trace(text, intent.normalized_text, "rule", "unsupported", 0.0, [], "failed", timer.finish(), error=intent.ambiguity_reason)
+            return
+        if intent.requires_clarification:
+            self.emit(type="activity", state="clarifying", message=intent.ambiguity_reason)
+            self.emit(type="action", message=intent.ambiguity_reason)
+            record_trace(text, intent.normalized_text, "rule", "clarify", 0.5, [], "clarifying", timer.finish(), ambiguity_reason=intent.ambiguity_reason)
+            return
+
         try:
-            candidates=proposals(text)
-            # This is a read-only preflight. Execution rechecks immediately
-            # before navigation in case the active tab changes while Laya runs.
-            if self.has_result_followup(candidates):
-                self.require_browser_context()
+            with timer.measure('plan_validation_ms'):
+                candidates = proposals(text, self.context)
+                if self.has_result_followup(candidates):
+                    self.require_browser_context()
         except ValueError as error:
             self.emit(type="action", error=True, message=str(error))
+            record_trace(text, text, "rule", "error", 0.0, [], "failed", timer.finish(), error=str(error))
             return
         except RuntimeError as error:
             self.emit(type="action", error=True, message=str(error))
+            record_trace(text, text, "rule", "error", 0.0, [], "failed", timer.finish(), error=str(error))
             return
+
+        all_resolved = all(action is not None for _, action in candidates)
+        if all_resolved and intent.confidence >= 0.90:
+            plan = Plan(tuple(action for _, action in candidates))
+            timer.record_stage('laya_inference_ms', 0.0)
+            self.emit(type="decision", model="rule-engine", intent=intent.intent_type,
+                      probability=intent.confidence, elapsed_ms=0)
+            self.emit(type="activity", state="validating", message="Validated plan upfront…")
+            record_trace(text, intent.normalized_text, "rule", intent.intent_type, intent.confidence,
+                         [self.step_label(s) for s in plan.steps], "succeeded", timer.finish())
+            self.enqueue_action(plan)
+            return
+
         self.start_decisions()
         try:
-            self.decisions.put_nowait((self.generation, text))
+            self.decisions.put_nowait((self.generation, text, timer, intent))
         except queue.Full:
             self.emit(type="action", error=True, message="Too many pending commands. Wait a moment or press Stop.")
             return
@@ -407,17 +547,29 @@ class Backend:
 
     def finish_decision(self, event):
         self.pending = max(0, self.pending - 1)
+        timer = event.get("timer")
+        intent = event.get("intent")
         if event["type"] == "decision_error":
             self.emit(type="action", error=True, message="Laya couldn’t decide: " + event["message"])
+            if timer:
+                record_trace(intent.raw_text if intent else "", intent.normalized_text if intent else "",
+                             "laya", "error", 0.0, [], "failed", timer.finish(), error=event["message"])
         else:
             decision = event["decision"]
             self.emit(type="decision", model="convaiinnovations/laya", intent=decision.intent,
                       probability=decision.probability, elapsed_ms=decision.elapsed_ms)
             if decision.action:
                 self.emit(type="activity", state="executing", message="Applying desktop action…")
+                if timer:
+                    steps = [self.step_label(s) for s in decision.action.steps] if isinstance(decision.action, Plan) else [self.step_label(decision.action)]
+                    record_trace(intent.raw_text if intent else "", intent.normalized_text if intent else "",
+                                 "laya", decision.intent, decision.probability, steps, "succeeded", timer.finish())
                 self.enqueue_action(decision.action)
             else:
                 self.emit(type="action", message=decision.reason)
+                if timer:
+                    record_trace(intent.raw_text if intent else "", intent.normalized_text if intent else "",
+                                 "laya", decision.intent, decision.probability, [], "failed", timer.finish(), ambiguity_reason=decision.reason)
         self.emit(type="activity", state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
 
     def transcript(self, text, final):
@@ -462,6 +614,8 @@ class Backend:
             self.emit(type="routines", routines=[r.to_dict() for r in routines.values()])
         elif command == "feedback":
             self.emit(type="action", message=str(request.get("message", "")))
+        elif command == "diagnostics":
+            self.emit(type="diagnostics", **get_diagnostics_summary())
 
     def main(self):
         def read_requests():

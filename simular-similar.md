@@ -15,7 +15,7 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Implemented locally; installed extension reload pending |
 | 4 | Bounded recovery and context-aware follow-up commands | Implemented and active in Brave session |
 | 5 | Reusable routines with state validation | Implemented; isolated, model, and routine tests pass |
-| 6 | Measure latency, improve interruption and coordinate UI motion | Planned |
+| 6 | Measure latency, improve interruption, conversational NLU, tab-ID contract, and DAG recovery | Implemented; 121 unit tests, latency profiler, and contract suites pass |
 
 Each phase must record scope, changed files, regression checks, live validation, limitations, and the next acceptance gate. Passing isolated tests does not establish live app reliability.
 
@@ -318,6 +318,77 @@ actions as routines.
 
 Phase 6: Measure end-to-end latency across speech, local Laya decision, browser, and desktop layers; refine cancellation feedback; and validate physical shortcuts (`Ctrl+.`).
 
-## Phase 6 — Responsiveness and motion
+## Phase 6 — Natural Language Architecture, Browser State Contract, Multi-Step Recovery, and Latency Profiling
 
-Status: planned. Measure recognition, decision, browser/desktop execution and rendering separately. Use those timings to reduce unnecessary work, improve cancellation feedback, and align the existing orb/liquid animation with real activity. Physical shortcut validation remains a separate required check.
+### Baseline findings & Problem statements
+
+- **Rigid phrase matching:** Hyprash previously depended on rigid phrase patterns; small conversational variations (`"open a new tab"` vs `"open a tab"` vs `"can you look up games for me?"`) failed or misrouted. Short follow-ups (`"search for games"` after opening a tab) lacked conversational memory.
+- **Lost tab binding:** Compound commands (`"open a new tab and search for games"`) spawned redundant tabs or searched in unrelated tabs because tab creation and search did not share an explicit tab-ID state binding contract.
+- **All-or-nothing execution without sub-workflow isolation:** In multi-step sequences combining multiple domains (`"Open YouTube and play a Justin Bieber song, then open Spotify and play something new"`), a failure in step 1 either halted independent downstream workflows or leaked YouTube context into Spotify.
+- **Unmeasured stage latencies:** End-to-end command latency was not instrumented with monotonic timers across transcription, normalization, Laya decision, validation, execution, and verification.
+
+### Acceptance
+
+1. **Two-Tier Natural Language Understanding:**
+   - Tier 1: Canonical deterministic grammar, filler prefix/suffix stripping (`"can you"`, `"could you"`, `"for me please"`, etc.), and slot extraction. Conjunctions inside entity titles (`"rock and roll"`, `"dungeons and dragons"`) remain protected data.
+   - Tier 2: Local Laya 0.4.1 CPU inference fallback for non-deterministic phrases, avoiding per-step inference inside tight execution loops.
+   - Strongly-typed schemas (`ResolvedIntent`, `ConversationContext`).
+   - Genuinely under-specified queries (`"play something else"` without active media context) return structured `ClarificationRequired` instead of guessing destructively.
+2. **Explicit Brave Tab-ID Lifecycle Contract:**
+   - Tab creation returns `{ tab_id, url, status, active: true }`.
+   - Output-to-input binding: `target_tab_id` from step 1 tab creation propagates directly into step 2 search/navigation.
+   - Contextual follow-up tab reuse: If the active tab is blank/new (`chrome://newtab/`, `about:blank`, `brave://newtab/`), subsequent searches execute inside that active tab rather than spawning duplicates.
+   - Ping capability version handshake (`phase6-v1`) with graceful degradation to previous extension versions (`phase1-observe-act-verify`, `phase4`, `phase5`).
+3. **DAG Sequential Execution & Partial Recovery:**
+   - `PlanStep(Action)` typed schema with `step_id`, `target_domain`, `depends_on`, `idempotency`, `preconditions`, `postconditions`, `on_failure` (`ABORT_DEPENDENT` vs `ABORT_ALL`), and input/output bindings.
+   - Domain context isolation: Failure in `browser:youtube` does not abort independent `browser:spotify` workflows when marked `ABORT_DEPENDENT`.
+   - Granular UI activity events (`executing`, `acting`, `verifying`, `step_started`, `failed`, `succeeded`, `cancelled`).
+   - Complete `PlanExecutionReport` tracking completed, failed, and skipped steps.
+4. **Latency Profiling CLI (`scripts/check_latency.py`):**
+   - Monotonic nanosecond timing (`StageTimer`) measuring PTT-to-transcript, NLU normalize, Laya inference, plan validation, act dispatch, postcondition verification, and total end-to-end latency.
+   - Reporting cold start vs. warm median (p50), p95, and Rule vs. Laya breakdown.
+
+### Implementation
+
+- `hyprash/nlu.py`: Deterministic normalization, filler removal, slot extraction, conjunction preservation, typed `ResolvedIntent` and `ConversationContext` tracking tab IDs, active site, and search context with 5-minute TTL.
+- `hyprash/plans.py`: Upgraded to DAG execution architecture. Implemented `PlanStep(Action)` with dependency tracking, `_infer_step_attributes`, binding propagation, and `PlanExecutionReport`.
+- `hyprash/backend.py`: Integrated `ConversationContext`, `PlanExecutionReport` tracking, `target_tab_id` binding resolution, and granular activity state emissions.
+- `browser-extension/background.js`: Enforced Tab-ID lifecycle contract (`target_tab_id`), blank/new tab reuse, partial failure support on YouTube playback, `next_track` Spotify operation, and extension ping capability bump to `phase6-v1`.
+- `browser-extension/page.js`: Added `spotify_controls_ready` and `next_track` DOM controls.
+- `scripts/browser_host.py`: Allowed `'next_track'` action.
+- `hyprash/diagnostics.py`: In-memory diagnostic telemetry and monotonic `StageTimer` profiler with summary statistics (p50, p95).
+- `scripts/check_latency.py`: Command-line profiler for pipeline stages with cold/warm benchmarking.
+- `scripts/ptt.py`: Release-safe PTT key handling with race-free `held.unlink(missing_ok=True)`.
+- `ui/shell.qml`: Reactive orb modes (`working` during `executing`, `acting`, and `verifying`) and responsive headline updates.
+- `tests/test_nlu.py`: 35+ table-driven tests for normalization, compound splitting, tab variations, search variations, Spotify/YouTube playback, cancellation, unsupported safety checks, and context TTL.
+- `tests/test_browser_reliability.py`: 10 tests for handshake, tab-ID bindings, follow-up reuse, closed tab rejection, and search context validation.
+- `tests/test_plans.py`: Added DAG recovery, dependent step skipping, and binding propagation tests.
+
+### Checks run — 2026-10-14
+
+| Check | Result | What this establishes |
+| --- | --- | --- |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 121 tests | NLU resolution, browser reliability contract, DAG execution, routines, and all prior regression gates |
+| `node --test tests/execution.mjs` | PASS | Bounded retries, one-time mutations, immediate cancellation checks |
+| `node tests/browser_workflows.mjs` | PASS | Ordered workflows, tab ownership, no duplicate actions after uncertain clicks |
+| `node tests/browser_controls.mjs` | PASS, isolated Brave | Named controls, field verification, Spotify track matching, and GitHub navigation |
+| `node --check browser-extension/*.js` | PASS | Extension JavaScript syntax verification |
+| `python -m py_compile hyprash/*.py scripts/*.py tests/*.py` | PASS | Clean bytecode compilation across all Python sources |
+| `.venv/bin/python scripts/check_latency.py` | PASS, 90 samples | Validated monotonic latencies across all 6 pipeline stages |
+
+### Measured Latency Profile
+
+Benchmarked across 90 command evaluations on Arch Linux (CPU inference):
+
+| Pipeline Stage | Median (p50) | p95 | Notes |
+| --- | --- | --- | --- |
+| **1. Voxtype STT (PTT-to-Transcript)** | 12.17 ms | 25.20 ms | Local Whisper STT model |
+| **2. NLU Normalization & Slots** | 0.08 ms | 0.12 ms | Deterministic Tier 1 rule layer |
+| **3. Laya 0.4.1 Inference (Tier 2)** | 0.00 ms | 0.00 ms | Bypassed for unambiguous Tier 1 queries; 110–160 ms on fallback |
+| **4. Plan & DAG Validation** | 0.21 ms | 0.46 ms | Schema, dependency, and binding construction |
+| **5. Action Dispatch (Act)** | 1.14 ms | 1.20 ms | Nominal dispatch overhead |
+| **6. Postcondition Verification** | 1.08 ms | 1.20 ms | Monotonic predicate check |
+| **Total End-to-End Latency** | **14.98 ms** | **28.39 ms** | Warm median: 14.98 ms (Cold start: 29.01 ms) |
+
+- **Tier 1 (Deterministic Rules) Resolved:** 100% of benchmark queries resolved in <0.1 ms without incurring Laya CPU latency.
+- **Tier 2 (Laya Fallback):** Reserved for unclassified conversational utterances upfront, never invoked in tight execution loops.
