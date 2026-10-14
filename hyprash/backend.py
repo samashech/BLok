@@ -18,6 +18,7 @@ from hyprash.plans import Plan, proposals
 from hyprash.themes import ThemeStore
 from hyprash.nlu import ConversationContext, resolve_intent, normalize_utterance
 from hyprash.diagnostics import StageTimer, record_trace, get_diagnostics_summary
+from hyprash.recording import SessionActionRecorder, compile_routine
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("HYPRASH_DATA", ROOT / "data"))
@@ -48,6 +49,13 @@ class Backend:
         from hyprash.nlu import ConversationContext
         self.context = ConversationContext()
         self.last_execution_report = None
+        self.action_recorder = SessionActionRecorder()
+        self.recording_routine_name = None
+        self.recorded_routine_steps = []
+        self.approval_events = {}
+        self.approval_results = {}
+        self.active_plan_id = None
+        self.last_executed_plan = None
 
     def emit(self, **event):
         generation=getattr(self.worker_context,"generation",None)
@@ -58,6 +66,50 @@ class Backend:
 
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
+
+    def has_pending_approval(self) -> bool:
+        return any(not event.is_set() for event in self.approval_events.values())
+
+    def wait_for_approval(self, approval_id: str, timeout: float = 30.0) -> bool:
+        event = self.approval_events.get(approval_id)
+        if not event:
+            return False
+        done = event.wait(timeout=timeout)
+        generation = getattr(self.worker_context, "generation", self.generation)
+        if generation != self.generation:
+            self.approval_events.pop(approval_id, None)
+            self.approval_results.pop(approval_id, None)
+            return False
+        result = self.approval_results.get(approval_id, False) if done else False
+        self.approval_events.pop(approval_id, None)
+        self.approval_results.pop(approval_id, None)
+        return result
+
+    def resolve_approval(self, approval_id: str, approved: bool):
+        if not approval_id:
+            return self.resolve_latest_approval(approved)
+        if approval_id in self.approval_events:
+            self.approval_results[approval_id] = approved
+            self.approval_events[approval_id].set()
+            self.emit(type="approval_resolved", approval_id=approval_id, approved=approved)
+            return True
+        return False
+
+    def resolve_latest_approval(self, approved: bool):
+        for approval_id, event in reversed(list(self.approval_events.items())):
+            if not event.is_set():
+                self.approval_results[approval_id] = approved
+                event.set()
+                self.emit(type="approval_resolved", approval_id=approval_id, approved=approved)
+                return True
+        return False
+
+    def cancel_all_approvals(self):
+        for approval_id, event in list(self.approval_events.items()):
+            self.approval_results[approval_id] = False
+            event.set()
+        self.approval_events.clear()
+        self.approval_results.clear()
 
     def stop(self):
         self.listening = False
@@ -75,8 +127,10 @@ class Backend:
                 return
         self.planner = StreamPlanner()
         self.pending = 0
-        self.browser_context = None
-        self.context.clear_search_context()
+        if not self.context.is_search_context_valid():
+            self.browser_context = None
+            self.context.clear_search_context()
+        self.cancel_all_approvals()
         self.emit(type="activity", state="idle")
         self.emit(type="level", value=0)
         self.status("ready", "Microphone off")
@@ -188,6 +242,19 @@ class Backend:
         return labels.get(action.kind, 'Run action ') + (action.value if action.kind in ('open', 'workspace', 'browser_key') else '')
 
 
+    def _record_executed_action(self, action):
+        self.action_recorder.record(action, label=self.step_label(action))
+        if self.recording_routine_name:
+            self.recorded_routine_steps.append(action)
+
+    def emit_timeline(self, plan_id: str, status: str, timeline_steps: list[dict]):
+        self.emit(
+            type="timeline_update",
+            plan_id=plan_id,
+            status=status,
+            steps=[dict(s) for s in timeline_steps],
+        )
+
     def execute_plan(self, plan):
         from hyprash.plans import PlanExecutionReport
         generation = getattr(self.worker_context, "generation", self.generation)
@@ -196,10 +263,35 @@ class Backend:
         completed_step_ids = []
         skipped_step_ids = []
         step_outputs = {}
+        plan_id = uuid.uuid4().hex[:8]
+        self.active_plan_id = plan_id
+        self.last_executed_plan = plan
+
+        timeline_steps = [
+            {
+                "step_id": getattr(s, "step_id", f"step_{i}"),
+                "subtask_id": getattr(s, "subtask_id", f"subtask_{i}"),
+                "kind": s.kind,
+                "value": s.value,
+                "label": self.step_label(s),
+                "domain": getattr(s, "target_domain", "general"),
+                "risk_level": getattr(s, "risk_level", "SAFE_READ"),
+                "requires_approval": getattr(s, "requires_approval", False),
+                "status": "pending",
+                "duration_ms": 0,
+            }
+            for i, s in enumerate(plan.steps, 1)
+        ]
+        self.emit_timeline(plan_id, "running", timeline_steps)
 
         for index, action in enumerate(plan.steps, 1):
+            sid = getattr(action, 'step_id', f'step_{index}')
+            current_step_item = timeline_steps[index - 1]
+
             if generation != self.generation:
                 self.emit(type='activity', state='cancelled', message='Plan cancelled.')
+                current_step_item["status"] = "skipped"
+                self.emit_timeline(plan_id, "cancelled", timeline_steps)
                 self.last_execution_report = PlanExecutionReport(
                     completed_steps=completed_step_ids,
                     failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
@@ -211,9 +303,10 @@ class Backend:
             # Check dependencies: if any predecessor failed, skip this step
             failed_deps = [d for d in getattr(action, 'depends_on', ()) if d in failed_step_ids]
             if failed_deps:
-                sid = getattr(action, 'step_id', f'step_{index}')
                 failed_step_ids.add(sid)
                 skipped_step_ids.append(sid)
+                current_step_item["status"] = "skipped"
+                self.emit_timeline(plan_id, "running", timeline_steps)
                 self.emit(type='activity', state='executing',
                           message=f'Step {index} of {total} · Skipped {self.step_label(action)} (predecessor failed)')
                 continue
@@ -227,14 +320,56 @@ class Backend:
                             from dataclasses import replace
                             target_step = replace(action, target_tab_id=step_outputs[bind_key])
 
+            # HITL Approval Gate
+            if getattr(action, 'requires_approval', False):
+                current_step_item["status"] = "awaiting_approval"
+                self.emit_timeline(plan_id, "awaiting_approval", timeline_steps)
+                approval_id = str(uuid.uuid4())
+                self.approval_events[approval_id] = threading.Event()
+                self.approval_results[approval_id] = False
+                self.emit(
+                    type="approval_request",
+                    approval_id=approval_id,
+                    plan_id=plan_id,
+                    step_id=sid,
+                    action=action.kind,
+                    value=action.value,
+                    risk_level=getattr(action, "risk_level", "SENSITIVE_DESTRUCTIVE"),
+                    reason=getattr(action, "approval_reason", "Sensitive action requires approval"),
+                    domain=getattr(action, "target_domain", "general"),
+                )
+                self.emit(type="activity", state="awaiting_approval",
+                          message=f"Approval needed: {getattr(action, 'approval_reason', self.step_label(action))}")
+
+                approved = self.wait_for_approval(approval_id, timeout=30.0)
+                if not approved:
+                    failed_step_ids.add(sid)
+                    current_step_item["status"] = "failed"
+                    self.emit_timeline(plan_id, "failed", timeline_steps)
+                    self.emit(type="action", error=True, message=f"Action '{self.step_label(action)}' was rejected or timed out.")
+                    self.last_execution_report = PlanExecutionReport(
+                        completed_steps=completed_step_ids,
+                        failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
+                        skipped_steps=skipped_step_ids,
+                        overall_status="failed"
+                    )
+                    return False
+
+            current_step_item["status"] = "running"
+            self.emit_timeline(plan_id, "running", timeline_steps)
             self.emit(type='activity', state='step_started',
                       message=f'Step {index} of {total} · {self.step_label(target_step)}')
             self.emit(type='activity', state='acting',
                       message=f'Step {index} of {total} · {self.step_label(target_step)}')
 
-            if not self.execute(target_step):
-                sid = getattr(action, 'step_id', f'step_{index}')
+            t_start = time.monotonic()
+            step_ok = self.execute(target_step)
+            dur_ms = int((time.monotonic() - t_start) * 1000)
+            current_step_item["duration_ms"] = dur_ms
+
+            if not step_ok:
                 failed_step_ids.add(sid)
+                current_step_item["status"] = "failed"
                 # Determine if remaining steps can proceed
                 remaining_steps = plan.steps[index:]
                 can_continue = False
@@ -253,6 +388,7 @@ class Backend:
                                   message=f'Stopped at step {index} of {total}; later steps were not run.')
                         self.emit(type='activity', state='failed',
                                   message=f'Stopped at step {index} of {total}')
+                    self.emit_timeline(plan_id, "failed", timeline_steps)
                     self.last_execution_report = PlanExecutionReport(
                         completed_steps=completed_step_ids,
                         failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
@@ -261,8 +397,9 @@ class Backend:
                     )
                     return False
             else:
-                sid = getattr(action, 'step_id', f'step_{index}')
                 completed_step_ids.append(sid)
+                current_step_item["status"] = "verified"
+                self.emit_timeline(plan_id, "running", timeline_steps)
                 if getattr(action, 'output_binding', None) == "tab_id":
                     tab_id = self.context.active_tab_id or (self.browser_context and self.browser_context.get('tabId'))
                     if tab_id:
@@ -270,6 +407,7 @@ class Backend:
 
         if failed_step_ids:
             self.emit(type='activity', state='failed', message='Plan finished with partial failures.')
+            self.emit_timeline(plan_id, "partial_failure", timeline_steps)
             self.last_execution_report = PlanExecutionReport(
                 completed_steps=completed_step_ids,
                 failed_steps=[{'step_id': s, 'stage': 'act'} for s in failed_step_ids],
@@ -279,6 +417,7 @@ class Backend:
             return False
 
         self.emit(type='activity', state='succeeded', message='Plan completed successfully.')
+        self.emit_timeline(plan_id, "completed", timeline_steps)
         self.last_execution_report = PlanExecutionReport(
             completed_steps=completed_step_ids,
             failed_steps=[],
@@ -308,6 +447,7 @@ class Backend:
                 active=json.loads(browser.run(['hyprctl','-j','activewindow']))
                 if active.get('title') in ('Hyprash · Notes','Hyprash · Camera'):
                     self.emit(type="ui_control", window=active['title'], **task)
+                    self._record_executed_action(action)
                     return True
                 if browser.BROWSERS.fullmatch(active.get('class','')):
                     message=self.browser_task(task)
@@ -364,6 +504,7 @@ class Backend:
                         self.external_note_title=title
                         message='Saved Obsidian note · '+self.external_note_title
                     self.emit(type="action",message=message)
+                    self._record_executed_action(action)
                     return True
                 self.ensure_note()
                 if kind == "new_note":
@@ -379,6 +520,7 @@ class Backend:
                     message=desktop.control({'action':'click','target':'Take Picture'})['message']
                 else:
                     self.emit(type="camera", capture=True)
+                    self._record_executed_action(action)
                     return True
             elif kind == "workspace":
                 self.run_command(["hyprctl", "dispatch", f'hl.dsp.focus({{workspace="{value}"}})'])
@@ -409,6 +551,7 @@ class Backend:
             else:
                 return False
             self.emit(type="action", message=message)
+            self._record_executed_action(action)
             return True
         except (OSError, ValueError, subprocess.SubprocessError, RuntimeError) as error:
             if isinstance(error,browser.BrowserTaskError):
@@ -511,6 +654,59 @@ class Backend:
             self.emit(type="action", message=intent.ambiguity_reason)
             record_trace(text, intent.normalized_text, "rule", "clarify", 0.5, [], "clarifying", timer.finish(), ambiguity_reason=intent.ambiguity_reason)
             return
+        if intent.intent_type in ("hitl_approve", "hitl_reject"):
+            if self.has_pending_approval():
+                approved = (intent.intent_type == "hitl_approve")
+                self.resolve_latest_approval(approved)
+            else:
+                self.emit(type="action", message="No pending action requires approval.")
+            return
+        if intent.intent_type == "start_recording_routine":
+            name = intent.slots.get("name") or "custom_routine"
+            self.recording_routine_name = name
+            self.recorded_routine_steps = []
+            self.emit(type="recording_started", name=name)
+            self.emit(type="action", message=f"Started recording routine '{name}'. Perform your actions, then say 'stop recording'.")
+            record_trace(text, intent.normalized_text, "rule", "start_recording_routine", 1.0, [], "succeeded", timer.finish())
+            return
+        if intent.intent_type == "stop_recording_routine":
+            if not self.recording_routine_name:
+                self.emit(type="action", message="No active routine recording to stop.")
+                record_trace(text, intent.normalized_text, "rule", "stop_recording_routine", 1.0, [], "succeeded", timer.finish())
+                return
+            name = self.recording_routine_name
+            steps = list(self.recorded_routine_steps)
+            self.recording_routine_name = None
+            self.recorded_routine_steps = []
+            if not steps:
+                self.emit(type="action", error=True, message=f"No actions were executed during recording '{name}'. Routine not saved.")
+                return
+            try:
+                routine = compile_routine(name, steps, data_dir=DATA)
+                self.emit(type="routine_saved", routine=routine.to_dict())
+                self.emit(type="action", message=f"Saved routine '{routine.name}' with {len(routine.steps)} steps.")
+                record_trace(text, intent.normalized_text, "rule", "stop_recording_routine", 1.0, [self.step_label(s) for s in steps], "succeeded", timer.finish())
+            except Exception as error:
+                self.emit(type="action", error=True, message=f"Failed to save routine '{name}': {error}")
+            return
+        if intent.intent_type == "save_recent_routine":
+            name = intent.slots.get("name") or "recent_routine"
+            steps = []
+            if self.last_executed_plan and self.last_executed_plan.steps:
+                steps = list(self.last_executed_plan.steps)
+            elif self.action_recorder:
+                steps = self.action_recorder.get_last_n(5)
+            if not steps:
+                self.emit(type="action", error=True, message="No recent actions found to save as a routine.")
+                return
+            try:
+                routine = compile_routine(name, steps, data_dir=DATA)
+                self.emit(type="routine_saved", routine=routine.to_dict())
+                self.emit(type="action", message=f"Saved recent actions as routine '{routine.name}' with {len(routine.steps)} steps.")
+                record_trace(text, intent.normalized_text, "rule", "save_recent_routine", 1.0, [self.step_label(s) for s in steps], "succeeded", timer.finish())
+            except Exception as error:
+                self.emit(type="action", error=True, message=f"Failed to save routine '{name}': {error}")
+            return
 
         try:
             with timer.measure('plan_validation_ms'):
@@ -582,6 +778,14 @@ class Backend:
         if text.strip().lower().strip(" .!?,") == "stop listening":
             self.stop()
             return
+        if not text.strip(" .!?,"):
+            return
+        if self.has_pending_approval():
+            intent = resolve_intent(text, self.context)
+            if intent.intent_type in ("hitl_approve", "hitl_reject", "cancel"):
+                approved = (intent.intent_type == "hitl_approve")
+                self.resolve_latest_approval(approved)
+                return
         normalized = text.lower().replace("dot com", ".com").replace("dot org", ".org")
         normalized = re.sub(r"\s+\.", ".", normalized)
         if normalized.strip():
@@ -597,6 +801,10 @@ class Backend:
         elif command == "text":
             if self.listening or self.voice is not None: self.stop()
             self.transcript(str(request.get("text", ""))[:4000], True)
+        elif command in ("approve", "reject"):
+            approval_id = request.get("id") or request.get("approval_id")
+            approved = (command == "approve")
+            self.resolve_approval(approval_id, approved)
         elif command == "save_note" and self.note and request.get("id") == self.note["id"]:
             self.note.update(title=str(request.get("title", "Untitled"))[:500], body=str(request.get("body", ""))[:100000])
             self.publish_note(show=False)

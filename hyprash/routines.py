@@ -34,6 +34,10 @@ class Precondition:
     def from_dict(cls, data):
         return cls(kind=data.get('kind', ''), target=data.get('target', ''))
 
+    @property
+    def type(self) -> str:
+        return self.kind
+
 
 @dataclass(frozen=True)
 class Routine:

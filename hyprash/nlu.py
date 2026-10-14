@@ -42,31 +42,69 @@ SITES = {
 
 FILLER_PREFIXES = re.compile(
     r'^(?:'
+    r'yo bro|yo|bro|dude|man|'
     r'can you please|could you please|would you please|will you please|'
     r'can you|could you|would you|will you|'
     r'hey hyprash|hey assistant|hey|hi hyprash|hi|hello|'
     r'okay hyprash|okay now|okay|ok now|ok|'
-    r'i want you to|i want to|i would like you to|i would like to|i\'d like you to|i\'d like to|'
+    r'i wanna|i want you to|i want to|i would like you to|i would like to|i\'d like you to|i\'d like to|'
     r'i need you to|i need to|'
     r'let\'s|lets|'
     r'go ahead and|feel free to|'
     r'now please|now|just|'
+    r'for me real quick|real quick|'
     r'please|pls'
     r')[,:]?\s+', re.I
 )
 
 FILLER_SUFFIXES = re.compile(
     r'[,.]?\s+(?:'
-    r'for me please|for us please|for me|for us|'
-    r'please|pls|thanks|thank you|'
+    r'for me real quick|real quick|for me please|for us please|for me|for us|'
+    r'you know|please|pls|thanks|thank you|'
     r'right now|quickly'
     r')[.!?]*\s*$', re.I
 )
 
-NEGATION_PATTERN = re.compile(r'\b(?:don\'t|do not|never|cancel|actually|instead)\b', re.I)
+NEGATION_PATTERN = re.compile(r'\b(?:don\'t|do not|never|cancel(?: that)?)\b', re.I)
 UNSUPPORTED_VERB = re.compile(
-    r'\b(?:delete|erase|remove|format|shutdown|shut down|reboot|restart|destroy|drop database|install|uninstall)\b', re.I
+    r'\b(?:delete all files|erase the disk|format drive c|shutdown|shut down|reboot|restart|destroy|drop database|uninstall)\b', re.I
 )
+
+
+def repair_self_corrections(text: str) -> str:
+    """Detect and resolve mid-sentence repairs, self-corrections, and disfluencies."""
+    s = text.strip()
+    s = re.sub(r'[\u2013\u2014]+|--', ' - ', s)
+
+    # 1. Full-clause / phrase repairs: "no wait", "wait no", "scratch that", "sorry no"
+    clause_repair = re.search(r'[,.\s-]+\b(?:no wait|wait no|scratch that|sorry no)\b[,:\s-]*', s, re.I)
+    if clause_repair:
+        before = s[:clause_repair.start()].strip()
+        after = s[clause_repair.end():].strip()
+        if after:
+            if re.match(r'^(?:open|launch|start|fire|spin|bring|search|look|find|play|put|create|make|write|go|visit|switch|take|stop|gimme|give)\b', after, re.I):
+                return after
+            m_entity = re.search(r'\b(search for|look up|find|play|put on|open|launch|create note|note titled)\s+(.+)$', before, re.I)
+            if m_entity:
+                lead = before[:m_entity.start(2)].strip()
+                return f"{lead} {after}".strip()
+            return after
+
+    # 2. Entity / Slot repairs: "actually", "or rather", "i mean"
+    slot_repair = re.search(r'[,.\s-]+\b(?:actually|or rather|i mean)\b[,:\s-]*', s, re.I)
+    if slot_repair:
+        before = s[:slot_repair.start()].strip()
+        after = s[slot_repair.end():].strip()
+        if after:
+            if re.match(r'^(?:open|launch|start|fire|spin|bring|search|look|find|play|put|create|make|write|go|visit|switch|take|stop|gimme|give)\b', after, re.I):
+                return after
+            m_verb = re.search(r'\b(search(?: for)?|look up|find(?: online)?|play|put on|open(?: up)?|launch|visit|go to|create note|title(?: it)?)\s+(.+)$', before, re.I)
+            if m_verb:
+                prefix = before[:m_verb.start(2)].strip()
+                return f"{prefix} {after}".strip()
+            return after
+
+    return s
 
 
 @dataclass(frozen=True)
@@ -88,18 +126,34 @@ class ResolvedIntent:
             return self.action_kind, self.action_value
         return None
 
+    @property
+    def slots(self) -> dict[str, Any]:
+        return self.entities
+
 
 @dataclass
 class ConversationContext:
     active_tab_id: int | None = None
+    last_active_tab_id: int | None = None
     active_site: str | None = None
+    active_url: str | None = None
     last_intent: str | None = None
     search_context: dict[str, Any] | None = None  # {tabId, url, site, query, created_at}
     active_app: str | None = None
     media_state: dict[str, Any] | None = None
+    last_executed_plan: Any = None
+    awaiting_approval: dict[str, Any] | None = None
+
+    @property
+    def active_domain(self) -> str | None:
+        return self.active_site
 
     def update_tab(self, tab_id: int | None, url: str | None = None, site: str | None = None):
+        if tab_id is not None and tab_id != self.active_tab_id:
+            self.last_active_tab_id = self.active_tab_id
         self.active_tab_id = tab_id
+        if url:
+            self.active_url = url
         if site:
             self.active_site = site
         elif url:
@@ -116,8 +170,10 @@ class ConversationContext:
             'query': query,
             'created_at': time.monotonic(),
         }
+        self.last_active_tab_id = self.active_tab_id
         self.active_tab_id = tab_id
         self.active_site = site
+        self.active_url = url
 
     def is_search_context_valid(self, ttl_seconds: float = 300.0) -> bool:
         if not self.search_context:
@@ -131,7 +187,9 @@ class ConversationContext:
     def to_summary(self) -> dict[str, Any]:
         return {
             'active_tab_id': self.active_tab_id,
+            'last_active_tab_id': self.last_active_tab_id,
             'active_site': self.active_site,
+            'active_url': self.active_url,
             'last_intent': self.last_intent,
             'has_valid_search': self.is_search_context_valid(),
             'active_app': self.active_app,
@@ -140,7 +198,8 @@ class ConversationContext:
 
 def normalize_utterance(text: str) -> str:
     """Clean conversational fillers, contractions, and domain words while preserving quotes and semantic entities."""
-    s = text.strip().replace('’', "'")
+    repaired = repair_self_corrections(text)
+    s = repaired.strip().replace('’', "'")
     s = s.replace("dot com", ".com").replace("dot org", ".org").replace("dot net", ".net")
     s = re.sub(r"\s+\.", ".", s)
 
@@ -182,6 +241,7 @@ def normalize_utterance(text: str) -> str:
 
 def split_compound_utterance(text: str) -> list[str]:
     """Split compound utterance on distinct action boundaries, preserving conjunctions inside queries/entities."""
+    repaired = repair_self_corrections(text)
     literals = {}
     def protect(m):
         k = f"__TOKEN_{len(literals)}__"
@@ -189,7 +249,7 @@ def split_compound_utterance(text: str) -> list[str]:
         return k
 
     # Protect quoted strings
-    masked = re.sub(r'"[^"\n]*"|(?<!\w)\'[^\'\n]*(?!\w)', protect, text)
+    masked = re.sub(r'"[^"\n]*"|(?<!\w)\'[^\'\n]*(?!\w)', protect, repaired)
 
     # Protect known conjunction phrases in common media / titles
     known_phrases = [
@@ -202,16 +262,17 @@ def split_compound_utterance(text: str) -> list[str]:
     for kp in known_phrases:
         masked = re.sub(kp, protect, masked, flags=re.I)
 
-    # If sequencers ("then", "and then", "after that", ";") exist, split on them first
-    sequencer = r'\s*(?:,\s*)?(?:and\s+then|then|after\s+that)\s*|\s*;\s*'
+    # If sequencers ("then", "and then", "after that", "once that's done", "next", ";") exist, split on them first
+    sequencer = r'\s*(?:,\s*)?(?:and\s+then|then|after\s+that|once that\'s done|next)\s*|\s*;\s*'
     if re.search(sequencer, masked, re.I):
         chunks = re.split(sequencer, masked, flags=re.I)
     else:
         # Otherwise split on 'and' before an imperative verb
         verb_boundary = (
-            r'\s+and\s+(?=(?:open|create|make|write|add|take|search|play|go|visit|launch|'
-            r'click|select|focus|type|enter|press|hit|reload|switch|find|delete|send|'
-            r'upload|install|remove|close|stop|rename|download|run|start|execute)\b)'
+            r'\s+and\s+(?=(?:open|create|make|write|add|take|search|look|play|put|blast|'
+            r'go|visit|launch|fire|spin|bring|hop|click|select|focus|type|enter|press|'
+            r'hit|reload|switch|find|delete|send|upload|install|remove|close|stop|'
+            r'rename|download|run|start|execute|gimme|give)\b)'
         )
         chunks = re.split(verb_boundary, masked, flags=re.I)
 
@@ -228,6 +289,16 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     """Tier 1: Canonical deterministic intent resolution & slot extraction."""
     raw = text.strip()
     norm = normalize_utterance(raw)
+
+    # 0. Empty input guard
+    if not norm or not any(c.isalnum() for c in norm):
+        return ResolvedIntent(
+            intent_type="empty",
+            confidence=0.0,
+            raw_text=raw,
+            normalized_text="",
+            ambiguity_reason="No speech recognized."
+        )
 
     # 1. Negation / Cancellation check
     if NEGATION_PATTERN.search(norm):
@@ -260,6 +331,65 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             action_value="",
         )
 
+    # 3a. HITL Approval / Rejection commands
+    if re.fullmatch(r'(?:yes|yeah|yep|approve|confirm|proceed|go ahead|do it|sure|ok|okay)(?:\s+(?:please|go ahead|do it|proceed|yes))?[.!]?', norm, re.I):
+        return ResolvedIntent(
+            intent_type="hitl_approve",
+            confidence=0.99,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="hitl_approval",
+            action_value="approve",
+        )
+    if re.fullmatch(r'(?:no|nope|reject|deny|cancel|skip(?: that)?|don\'t do that|abort)(?:\s+(?:thanks|thank you|cancel(?: that)?|no|don\'t))?[.!]?', norm, re.I):
+        return ResolvedIntent(
+            intent_type="hitl_reject",
+            confidence=0.99,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="hitl_approval",
+            action_value="reject",
+        )
+
+    # 3b. Routine Recording Commands
+    m = re.fullmatch(r'(?:start|begin|turn on) recording (?:the |a )?routine(?: named| called)? ([a-z0-9_ -]+)|record (?:the |a )?routine(?: named| called)? ([a-z0-9_ -]+)', norm, re.I)
+    if m:
+        r_name = (m[1] or m[2]).strip().replace(' ', '_').lower()
+        return ResolvedIntent(
+            intent_type="start_recording_routine",
+            entities={"name": r_name},
+            confidence=0.98,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="recording_routine",
+            action_value=json.dumps({"action": "start", "name": r_name}),
+        )
+
+    if re.fullmatch(r'(?:stop|finish|end) recording (?:the |a )?routine', norm, re.I):
+        return ResolvedIntent(
+            intent_type="stop_recording_routine",
+            confidence=0.98,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="recording_routine",
+            action_value=json.dumps({"action": "stop"}),
+        )
+
+    m = re.fullmatch(r'save (?:that|the last command|the last (first|second|third|fourth|fifth|[1-9]\d*) steps) as (?:my )?(?:routine )?([a-z0-9_ -]+?)(?: routine)?', norm, re.I)
+    if m:
+        steps_arg = m[1]
+        r_name = m[2].strip().replace(' ', '_').lower()
+        num_steps = ORDINALS.get(steps_arg.lower(), int(steps_arg) if steps_arg and steps_arg.isdigit() else None) if steps_arg else None
+        return ResolvedIntent(
+            intent_type="save_recent_routine",
+            entities={"name": r_name, "steps": num_steps},
+            confidence=0.98,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="recording_routine",
+            action_value=json.dumps({"action": "save_recent", "name": r_name, "steps": num_steps}),
+        )
+
     # 4. Under-specified bare queries that require clarification
     if norm.lower() in ("search", "search for something", "google", "search the web", "look up something", "find something"):
         return ResolvedIntent(
@@ -284,25 +414,26 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     m = re.fullmatch(r'(?:run|start|execute)(?: the)? (?:routine )?([a-z0-9_ -]+?)(?: routine)?', norm, re.I)
     if m:
         from hyprash.routines import get_routine
-        routine = get_routine(m[1].strip())
-        if routine:
-            return ResolvedIntent(
-                intent_type="routine",
-                entities={"name": routine.name},
-                confidence=0.98,
-                raw_text=raw,
-                normalized_text=norm,
-                action_kind="routine",
-                action_value=routine.name,
-            )
+        r_name = m[1].strip().replace(' ', '_').lower()
+        routine = get_routine(r_name)
+        actual_name = routine.name if routine else r_name
+        return ResolvedIntent(
+            intent_type="routine",
+            entities={"name": actual_name, "routine": actual_name},
+            confidence=0.98 if routine else 0.92,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind="routine",
+            action_value=actual_name,
+        )
 
     # 6. Tab creation
-    # Matches: "open a tab", "open a new tab", "can you open another tab for me?", "create a tab", "new tab"
+    # Matches: "tab", "open a tab", "open a new tab", "can you open another tab for me?", "create a tab", "new tab", "gimme another tab", "fresh tab"
     if re.fullmatch(
-        r'(?:(?:open|create|launch|start)(?: up)? )?'
+        r'(?:(?:open|create|launch|start|spin up|pop open|bring up|gimme|give me)(?: up)? )?'
         r'(?:a |an |another |the |fresh |new )*'
         r'(?:browser |brave )?'
-        r'tab'
+        r'tabs?'
         r'(?: in (?:brave|browser))?',
         norm, re.I
     ):
@@ -423,13 +554,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     site_pattern = r'(google|youtube|spotify)(?:\s*dot\s*com|\.com)?'
 
     # "google search games", "youtube search bbs", "spotify play god's plan"
-    m = re.fullmatch(rf'^{site_pattern} (search(?: for)?|play|look up) (.+)$', norm, re.I)
+    m = re.fullmatch(rf'^{site_pattern} (search(?: for| up)?|play(?: some)?|look up|put on|blast|throw on|spin) (.+)$', norm, re.I)
     if not m:
         # "open google and search for games", "go to youtube and play bbs"
-        m = re.fullmatch(rf'^(?:open|go to|visit) (?:www\.)?{site_pattern}(?: and(?: then)?| then) (search(?: for)?|play|look up) (.+)$', norm, re.I)
+        m = re.fullmatch(rf'^(?:open|go to|visit) (?:www\.)?{site_pattern}(?: and(?: then)?| then) (search(?: for| up)?|play(?: some)?|look up|put on|blast|throw on|spin) (.+)$', norm, re.I)
     if not m:
         # "search for games on google", "play god's plan on spotify"
-        m = re.fullmatch(rf'^(search(?: for)?|play|look up|find(?: some)?) (.+?) (?:on|in) {site_pattern}$', norm, re.I)
+        m = re.fullmatch(rf'^(search(?: for| up)?|play(?: some)?|put on|blast|throw on|spin|look up|find(?: some)?) (.+?) (?:on|in) {site_pattern}$', norm, re.I)
     if m:
         groups = m.groups()
         if len(groups) == 3:
@@ -440,7 +571,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         else:
             site_name, verb, query = groups[0].lower(), groups[1].lower(), groups[2].strip()
 
-        is_play = verb.startswith('play')
+        is_play = any(verb.startswith(p) for p in ('play', 'put', 'blast', 'throw', 'spin'))
         task: dict[str, Any] = {
             'action': 'play' if is_play else 'search',
             'site': site_name,
@@ -482,7 +613,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 14. General "search for <query>", "look up <query>", "find <query> online"
-    m = re.fullmatch(r'(?:search for|look up|find online|look online for|search the web for|search|find) (.+?)(?: online)?', norm, re.I)
+    m = re.fullmatch(r'(?:search(?: for| up)?|look up|find me|check out|see what\'s on|find online|look online for|search the web for|find) (.+?)(?: online)?', norm, re.I)
     if m:
         query = m[1].strip()
         site = context.active_site if (context and context.active_site in ('google', 'youtube', 'spotify')) else "google"
@@ -500,7 +631,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 15. "Play <track/artist>" (defaults to Spotify, unless explicit)
-    m = re.fullmatch(r'play (.+)', norm, re.I)
+    m = re.fullmatch(r'(?:play(?: some)?|put on|blast|throw on|spin(?!\s+up)|queue up) (.+)', norm, re.I)
     if m and not re.match(r'(?:the )?(?:first|second|third|fourth|fifth|[1-9])(?: |$)', m[1], re.I):
         song = m[1].strip()
         task = {'action': 'play', 'site': 'spotify', 'query': song}
@@ -602,7 +733,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 18. Application Launching & Site Navigation
-    m = re.fullmatch(r'(?:open(?: up)?|launch|bring up|go to|visit) (?:the |my )?(.+)', norm, re.I)
+    m = re.fullmatch(r'(?:open(?: up)?|launch|bring up|go to|visit|fire up|spin up|hop over to|hop to|pull up|pop open|switch to) (?:the |my )?(.+)', norm, re.I)
     if m:
         target = m[1].strip().lower().removesuffix(" app").removesuffix(" application")
         if target in APPS:

@@ -154,9 +154,9 @@ settles into the assistant box. Thinking orbs are integrated into the top UI.
 | Phase 3: current-screen semantic control | Implemented locally; Brave reload pending | Safer page controls, shadow-DOM discovery, stale-control protection, desktop control identity and owner-window checks |
 | Phase 4: context and recovery | Complete | Five-minute Google/YouTube result context, repeated tab/URL validation, stale-context rejection |
 | Phase 5: routines | Complete | Reusable workflows with explicit precondition checks (browser, vault, apps, notes) |
-| Phase 6: polish and measurement | Remaining | Timing metrics, cancellation refinements, physical shortcut validation, motion tied to real execution state |
+| Phase 6: conversational NLU & Simular mechanics | Complete | Slang/disfluency NLU, tab-ID continuity, Action Timeline UI, HITL approval gate, routine auto-recording, DAG recovery, latency profiler (183 Python tests + 14 Node tests) |
 
-Phases 1 and 2 are documented in `simular-similar.md`.
+Phases 1 through 6 are documented in `simular-similar.md`.
 
 ## Implemented capabilities
 
@@ -172,6 +172,12 @@ Phases 1 and 2 are documented in `simular-similar.md`.
 - Omarchy and Liquid themes.
 - Thinking orbs and liquid UI animation.
 - Multi-step plans, validated before actions begin.
+- Conversational slang, filler-prefix/suffix stripping, and mid-utterance disfluency self-corrections ("open spotify—no wait, open youtube").
+- Continuous multi-turn tab-ID and context tracking without memory loss on microphone toggle.
+- Live Action Timeline trace in Quickshell/QML (`ui/ActionTimeline.qml`) tracking step lifecycle (`pending`, `running`, `awaiting_approval`, `verified`, `failed`, `skipped`).
+- Human-in-the-Loop (HITL) approval cards for sensitive/destructive operations with 30s timeout, keyboard Enter/Esc, and voice approval.
+- Automated session routine recording (`"start recording routine"`, `"stop recording routine"`, `"save that as my morning routine"`).
+- Elimination of Voxtype typing leaks into active desktop windows via `--clipboard` flag.
 
 Phase 2 verification included 58 Python tests, browser execution and workflow
 tests, browser-control checks, and offline Laya plan fixtures.
@@ -264,25 +270,51 @@ control tests, offline Laya plan and routine fixtures, and bridge tests.
 Phase 6 upgrades Hyprash to handle conversational natural language, enforces an explicit tab-ID state contract between Python and the Brave MV3 extension, isolates sub-workflow execution across distinct domains with DAG dependencies, and introduces monotonic stage latency profiling.
 
 ### 1. Two-Tier Canonical Intent Resolver (`hyprash/nlu.py`, `hyprash/decision.py`)
-- **Tier 1 (Deterministic Normalization & Slots):** Strips conversational prefixes (`"can you"`, `"could you"`, `"hey hyprash"`, `"i want you to"`) and suffixes (`"for me please"`, `"right now"`), preserving semantic entities (`"rock and roll"`, `"dungeons and dragons"`) and quotes. Normalizes verbs to canonical intents without incurring CPU latency.
+- **Tier 1 (Deterministic Normalization & Slots):** Strips conversational prefixes (`"can you"`, `"could you"`, `"hey hyprash"`, `"yo bro"`, `"dude"`, `"i want you to"`) and suffixes (`"for me please"`, `"right now"`), preserving semantic entities (`"rock and roll"`, `"dungeons and dragons"`) and quotes. Normalizes slang verbs (`"fire up"`, `"spin up"`, `"hop over to"`, `"pop open"`, `"blast"`, `"throw on"`) without incurring CPU latency.
+- **Disfluency & Mid-Utterance Self-Corrections:** Resolves speech disfluencies (`"open spotify—no wait, open youtube"` $\rightarrow$ `"open youtube"`, `"search for cats actually dogs"` $\rightarrow$ `"search for dogs"`).
+- **Empty Speech & Keystroke Leak Guard:** Strips transcription quirks and whitespace/punctuation artifacts (`" ."`, `"..."`) before decision gating.
 - **Tier 2 (Semantic Fallback via Local Laya):** Unclassified conversational requests are resolved by local Laya 0.4.1 CPU inference upfront rather than in tight execution loops.
 - **Typed Schemas:** Defines explicit dataclasses:
   - `ResolvedIntent`: `intent_type`, `entities`, `confidence`, `ambiguity_reason`, `requires_clarification`, `raw_text`, `normalized_text`, `action_kind`, `action_value`.
   - `ConversationContext`: Tracks `active_tab_id`, `active_site`, `last_intent`, `search_context` (5-minute TTL), `active_app`.
 - **Under-specified Queries:** Queries like `"play something else"` without active media context return structured `ClarificationRequired` instead of guessing destructively.
 
-### 2. Explicit Tab-ID Lifecycle Contract (`browser-extension/background.js`, `hyprash/browser.py`)
+### 2. Explicit Tab-ID Lifecycle Contract & Multi-Turn Working Memory (`browser-extension/background.js`, `hyprash/browser.py`, `hyprash/backend.py`)
 - **Tab Creation & Verification:** `new_tab` creates a tab, reads it back, confirms it is active, and returns `{ tab_id, url, status, active: true }`.
 - **Output-to-Input Binding:** Multi-step plans pass the created `tab_id` from step 1 into step 2 (`target_tab_id`) so the search executes in that exact tab.
 - **Follow-Up Tab Reuse:** If the active tab is a blank/new tab (`chrome://newtab/`, `about:blank`, `brave://newtab/`), subsequent searches reuse that active tab rather than spawning duplicates.
+- **Non-destructive Microphone Toggles:** Working memory and `active_tab_id` are preserved across microphone toggle turns when within the 5-minute TTL, enabling natural follow-up instructions without losing browser continuity.
+- **Voxtype Keystroke Leak Prevention:** Passing `--clipboard` to `voxtype record start` overrides default `[output] mode = "type"` in `~/.config/voxtype/config.toml`, completely eliminating accidental keystrokes into active windows during speech recognition.
 - **Version Handshake (`phase6-v1`):** Extension ping reports `phase6-v1`, while gracefully handling live sessions reporting `phase1-observe-act-verify`.
 
-### 3. DAG Sequential Execution & Partial Recovery (`hyprash/plans.py`, `hyprash/backend.py`)
-- **PlanStep Schema:** Subclasses `Action` with `step_id`, `target_domain` (`browser:youtube`, `browser:spotify`, `desktop:notes`), `depends_on`, `idempotency`, `preconditions`, `postconditions`, `on_failure` (`ABORT_DEPENDENT` vs `ABORT_ALL`), and bindings.
+### 3. Subtask DAG Sequential Execution & Fault Isolation (`hyprash/plans.py`, `hyprash/backend.py`)
+- **PlanStep Schema:** Subclasses `Action` with `subtask_id`, `domain_scope` (`browser:youtube`, `browser:spotify`, `desktop:notes`), `depends_on`, `idempotency`, `preconditions`, `postconditions`, `risk_level`, `requires_approval`, `on_failure` (`ABORT_DEPENDENT` vs `ABORT_ALL`), and bindings.
 - **Domain Context Isolation:** In multi-domain compound plans (e.g. `"Open YouTube and play X, then open Spotify and play Y"`), a verification failure in YouTube halts YouTube-dependent steps but allows independent Spotify steps to proceed safely.
-- **Execution Telemetry:** Populates `PlanExecutionReport` (`completed_steps`, `failed_steps`, `skipped_steps`, `overall_status`) and emits granular UI events (`step_started`, `acting`, `verifying`, `succeeded`, `failed`, `cancelled`).
+- **Execution Telemetry:** Populates `PlanExecutionReport` (`completed_steps`, `failed_steps`, `skipped_steps`, `overall_status`) and emits real-time `timeline_update` snapshots.
 
-### 4. Monotonic Latency Profiler (`hyprash/diagnostics.py`, `scripts/check_latency.py`)
+### 4. Live Action Timeline & Execution Trace UI (`ui/ActionTimeline.qml`, `ui/shell.qml`)
+- Reverse-engineered from Simular AI's Sai Live Action Trace.
+- Embedded directly in Quickshell/QML overlay with themed step cards.
+- Tracks granular step lifecycles: `pending`, `running`, `awaiting_approval`, `verified`, `failed`, `skipped`.
+- Displays domain badges, formatted elapsed millisecond durations, and outcome icons.
+
+### 5. Human-in-the-Loop (HITL) Approval Gate (`hyprash/plans.py`, `hyprash/backend.py`, `ui/shell.qml`)
+- Reverse-engineered from Simular AI's Read-Only/Escalate Permission Guard.
+- `assess_step_risk()` identifies state-mutating, irreversible, or destructive actions (`delete`, `remove`, `pay`, `checkout`, note overwrite) or borderline model confidence (`0.55 <= conf < 0.72`).
+- Pauses plan execution at `awaiting_approval` with a 30-second countdown timeout.
+- Renders an Omarchy/Liquid Approval Card in QML with keyboard shortcuts (Enter to approve, Esc to reject), clickable buttons, and voice recognition (`"yes"`, `"approve"`, `"cancel"`).
+
+### 6. Auto-Recording User & Assistant Actions into Reusable Routines (`hyprash/recording.py`)
+- Reverse-engineered from Simular AI's Simulang Workflow Recording.
+- `SessionActionRecorder` ring buffer (30 actions) records verified actions and labels.
+- Voice commands:
+  - `"start recording routine [name]"` / `"record a routine"`
+  - `"stop recording routine"`
+  - `"save that as my [name] routine"`
+- `infer_routine_preconditions()` inspects recorded steps and infers environment requirements (`browser`, `vault`, `notes`, `app`).
+- Validates actions against strict schema rules and persists routines directly to `data/routines/<slug>.json`.
+
+### 7. Monotonic Latency Profiler (`hyprash/diagnostics.py`, `scripts/check_latency.py`)
 - Measures monotonic nanoseconds (`StageTimer`) across:
   1. Voxtype STT (PTT-to-transcript)
   2. NLU Normalization & Slot Extraction
@@ -298,7 +330,17 @@ Phase 6 upgrades Hyprash to handle conversational natural language, enforces an 
   ```
 - Benchmarks show warm median total latency of **~15 ms** for Tier 1 deterministic commands.
 
-### 5. Safe Brave Extension Reload Instructions
+### 8. Full Phase 6 Test Matrix (183 Python tests, 14 Node tests)
+- `.venv/bin/python -m unittest discover -s tests`: **183 tests pass in ~0.13s** (100% green).
+  - `tests/test_conversational_nlu.py`: 41 tests for slang, fillers, disfluencies, compound commands.
+  - `tests/test_multistep_dag.py`: 7 tests for DAG isolation, tab-ID propagation, risk assessment.
+  - `tests/test_simular_features.py`: 11 tests for timeline updates, HITL approval, routine recording.
+  - Prior suites (`test_nlu.py`, `test_browser_reliability.py`, `test_routines.py`, `test_plans.py`, `test_decision.py`): 124 regression tests pass.
+- `node tests/browser_controls.mjs`, `node tests/browser_workflows.mjs`, `node --test tests/execution.mjs`, `node --test tests/test_orbs.mjs`: All 14 tests pass.
+- `qmllint ui/ActionTimeline.qml`: 0 errors.
+- `./hyprash.sh status`: Active and responding on live Wayland desktop.
+
+### 9. Safe Brave Extension Reload Instructions
 To update the live Brave session to `phase6-v1`:
 1. Open `brave://extensions` in Brave.
 2. Locate the **Hyprash Browser Control** unpacked extension.

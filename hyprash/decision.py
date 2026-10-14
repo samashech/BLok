@@ -77,9 +77,11 @@ class LayaDecision:
                         min(d.probability for d in decisions), sum(d.elapsed_ms for d in decisions))
 
     def decide(self, text, proposed=None):
+        from hyprash.nlu import repair_self_corrections
         self.load()
         started = time.monotonic()
-        parsed = [proposed] if proposed is not None else parse(text)
+        text_clean = repair_self_corrections(text)
+        parsed = [proposed] if proposed is not None else parse(text_clean)
         # The grammar extracts literal arguments and shortlists valid actions.
         # Laya must accept the proposal; rejection never falls back to execution.
         if len(parsed) == 1:
@@ -111,22 +113,22 @@ class LayaDecision:
                 label = labels[proposed.kind]
             # Explicit alternative prevents opening Notes from becoming a new note.
             criteria = {label:"", "Do nothing":""}
-            choice, probability, margin = self.choose(text, criteria, "Choose the action requested by the user.")
+            choice, probability, margin = self.choose(text_clean, criteria, "Choose the action requested by the user.")
             action = proposed if choice == label else None
             intent = proposed.kind if action else "none"
         else:
-            choice, probability, margin = self.choose(text, dict.fromkeys(ROUTES, ""),
+            choice, probability, margin = self.choose(text_clean, dict.fromkeys(ROUTES, ""),
                 "Choose the action requested by the user.")
             intent, value = ROUTES.get(choice, ("none", ""))
             action = None
             if intent == "open": action = Action("open", value)
             elif intent in ("photo", "stop"): action = Action(intent)
             elif intent == "search":
-                match = re.search(r"\b(?:look up|look online for|find(?: online)?|search(?: the web)?(?: for)?)\s+(.+)", text, re.I)
+                match = re.search(r"\b(?:look up|look online for|find(?: online)?|search(?: the web)?(?: for)?)\s+(.+)", text_clean, re.I)
                 if match: action = Action("url", "https://www.google.com/search?q="+quote_plus(match[1].strip(" .?!")))
             # Note modifications require explicit literal arguments, never guessed text.
         reason = ""
-        if re.search(r"\b(?:don't|do not|never|cancel|actually|instead)\b", text, re.I):
+        if re.search(r"\b(?:don't|do not|never|cancel(?: that)?)\b", text_clean, re.I):
             action = None
             reason = "Request cancelled; no action taken"
         elif probability < 0.60 or margin < 0.15 or action is None:

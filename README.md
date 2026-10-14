@@ -26,8 +26,15 @@ Multi-step examples supported in one utterance:
 - “Open a new tab” creates a tab through the Brave extension.
 - “Search for bbs in YouTube and play the second video” waits for results, selects the requested video, and checks playback.
 - “Open GitHub and go to my repositories and find ClickyAI and open it” uses the signed-in account's repository list and matches the requested repository name.
+- “Open Spotify—no wait, open YouTube” repairs mid-utterance disfluencies and executes the corrected target.
+- “Fire up a new tab and look up some games for me” handles casual slang, conversational fillers, and output-to-input tab-ID binding.
+- “Start recording routine morning” / “Stop recording routine” / “Save that as my morning routine” automatically records verified actions and compiles them into persistent routines.
 
 These are supported task sequences, not arbitrary autonomous browsing. A failed or cancelled step stops the remaining steps. YouTube playback can be blocked by site restrictions; Spotify can require account permissions. Hyprash reports these failures instead of claiming playback.
+
+The **Action Timeline** displays a real-time execution trace directly inside the overlay (`pending`, `running`, `awaiting_approval`, `verified`, `failed`, `skipped`) with domain badges and millisecond timings.
+
+The **Human-in-the-Loop (HITL) Approval Gate** protects against state-mutating or destructive actions (`delete`, `remove`, `pay`, `checkout`, note overwrite) or borderline model confidence. Execution pauses at an Approval Card with a 30s countdown; confirm with Enter, click **Approve**, or say “approve” / “yes”. Cancel with Esc, click **Reject**, or say “reject” / “no”.
 
 The dedicated Obsidian vault is `data/Obsidian`; `data/obsidian-vault.json` selects it without deleting other vault registrations. Back up this folder like any other notes. Create/register it explicitly with `.venv/bin/python scripts/setup_obsidian_vault.py`; ordinary note commands do not create or move vaults.
 
@@ -35,7 +42,7 @@ Named controls: “click the Search button”, “click the search bar”, “ty
 
 Browser controls: “Go to the address bar”, “type weather in Delhi”, “press enter”, “new tab”, “go back”, “go forward”, “reload the page”. You can combine them: “Go to the address bar and type weather in Delhi and press enter”. Searches accept “search for”, “look up”, and “look online for”; queries keep words such as “and”.
 
-Also: “Can you bring up my terminal?”, “open files”, “open code”, “open github”, “visit example.com”, and “switch to workspace three”.
+Also: “Can you bring up my terminal?”, “open files”, “open code”, “open github”, “visit example.com”, and “switch to workspace three”. Casual slang like “spin up”, “hop to”, “pop open”, “blast”, or “throw on” is recognized natively.
 
 **Orb states follow real work:** breathing when idle, connecting while loading, listening with microphone activity, solving during Laya inference, working during action dispatch. No fabricated model reasoning is shown. Set `HYPRASH_REDUCED_MOTION=1` before launch to disable reveal and particle animation.
 

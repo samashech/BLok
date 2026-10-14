@@ -44,7 +44,7 @@ class VoxtypeSession:
         self.directory = tempfile.TemporaryDirectory(prefix='hyprash-voice-', dir=os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
         self.path = Path(self.directory.name)/'transcript.txt'
         try:
-            self.run('record', 'start', '--file='+str(self.path), '--no-auto-submit', '--no-smart-auto-submit', '--no-osd')
+            self.run('record', 'start', '--file='+str(self.path), '--clipboard', '--no-auto-submit', '--no-smart-auto-submit', '--no-osd')
             self.owned = True
             for _ in range(30):
                 if self.state() == 'recording':

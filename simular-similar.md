@@ -15,7 +15,7 @@ Keep local inference without API keys, Voxtype recognition, the existing signed-
 | 3 | Discover current screen controls; choose DOM/accessibility/visual methods | Implemented locally; installed extension reload pending |
 | 4 | Bounded recovery and context-aware follow-up commands | Implemented and active in Brave session |
 | 5 | Reusable routines with state validation | Implemented; isolated, model, and routine tests pass |
-| 6 | Measure latency, improve interruption, conversational NLU, tab-ID contract, and DAG recovery | Implemented; 121 unit tests, latency profiler, and contract suites pass |
+| 6 | Conversational NLU, disfluency repair, tab-ID continuity, Action Timeline UI, HITL approval gate, routine auto-recording, DAG recovery, latency profiling | Implemented; 183 Python tests, 14 Node tests, latency profiler, and live UI/IPC gates pass |
 
 Each phase must record scope, changed files, regression checks, live validation, limitations, and the next acceptance gate. Passing isolated tests does not establish live app reliability.
 
@@ -31,7 +31,7 @@ Each phase must record scope, changed files, regression checks, live validation,
 
 ## REA Evidence & Architecture Mapping
 
-Reconnaissance conducted via REA (`morluto/rea` v6.5.0) and local inspection of Simular AI's open repositories (`OpenACI`, `Agent-S`, `simulang`) in `.research/` extracted the following four core mechanics and mapped them into Hyprash:
+Reconnaissance conducted via REA (`morluto/rea` v6.5.0) and local inspection of Simular AI's open repositories (`OpenACI`, `Agent-S`, `simulang`) in `.research/` extracted the following seven core mechanics and mapped them into Hyprash:
 
 | Simular Mechanic / Pattern | Source Evidence | Hyprash Architecture Port (`hyprash/`) |
 | :--- | :--- | :--- |
@@ -39,6 +39,9 @@ Reconnaissance conducted via REA (`morluto/rea` v6.5.0) and local inspection of 
 | **OpenACI Resource Handle & Tab Continuity** | `OpenACI/openaci/ubuntu/UIElement.py`<br>`OpenACI/openaci/agent/UIAgent.py`<br>Binds UI actions to concrete system/window/tab handles and verifies state transitions before and after execution. | **`browser-extension/background.js` & `hyprash/browser.py`**:<br>Enforces explicit tab-ID state contract. `open_tab` returns `{ tab_id, url, status, active: true }`. Step 1 created `tab_id` binds to step 2 search/navigation. In `siteTab()`, existing blank tabs (`chrome://newtab/`, `about:blank`, `brave://newtab/`) are reused instead of spawning duplicate tabs. Lost ACKs are handled idempotently via pre-mutation observation. |
 | **Agent-S Subtask Decomposition & Reflection** | `Agent-S/gui_agents/s1/core/Manager.py`<br>`Agent-S/gui_agents/s1/core/Worker.py`<br>Hierarchical `Dag(nodes, edges)` execution with subtask context isolation and pre/post-condition reflection. | **`hyprash/plans.py` & `browser-extension/page.js`**:<br>DAG sequential execution via `PlanStep(Action)` with `target_domain`, `depends_on`, `idempotency`, and `on_failure` (`ABORT_DEPENDENT` vs `ABORT_ALL`). Failure in `browser:youtube` isolates YouTube without halting independent `browser:spotify` workflows. Explicit playback verification distinguishes page loading from active media playback. |
 | **Episodic Working Memory for Multi-Turn Follow-Ups** | `Agent-S/gui_agents/s1/core/ProceduralMemory.py`<br>`OpenACI/openaci/agent/ProceduralMemory.py`<br>Retains active session task, window, and target history across turns for seamless follow-up resolution. | **`hyprash/nlu.py` & `hyprash/backend.py`**:<br>`ConversationContext` maintains `active_tab_id`, `active_site`, and `search_context` (with 5-minute TTL). Enables multi-turn sequences: `"Open YouTube"` $\rightarrow$ `"Search for Justin Bieber"` $\rightarrow$ `"Play the first video"` $\rightarrow$ `"Now open Spotify"` $\rightarrow$ `"Play something else"`. Ambiguous bare requests without context return structured `ClarificationRequired`. |
+| **Action Timeline / Live Execution Trace UI** | `simular.ai` (Sai Live Action Trace UI) & `Agent-S/gui_agents/s1/core/Evaluator.py`<br>Streams live execution trace and step lifecycle states (`pending`, `running`, `awaiting_approval`, `verified`, `failed`, `skipped`) with domain badges and durations directly into the desktop canvas. | **`ui/ActionTimeline.qml`, `ui/shell.qml` & `hyprash/backend.py`**:<br>Live `ActionTimeline` QML component embedded into the overlay surface. Backend streams `timeline_update` event snapshots during plan execution, rendering step indicators, domain labels, elapsed execution milliseconds, and verified/failed icons. |
+| **Human-in-the-Loop (HITL) Approval Gate & Escalation** | `simular.ai` (Read-Only / Escalate Permission Guard) & `OpenACI/openaci/agent/SafetyGuard.py`<br>Intercepts state-mutating, irreversible, or destructive actions (`delete`, `remove`, `pay`, `checkout`, note overwrite) or borderline model decisions (`0.55 <= conf < 0.72`) with an explicit confirmation modal. | **`hyprash/plans.py`, `hyprash/backend.py` & `ui/shell.qml`**:<br>`assess_step_risk()` identifies high-risk actions. Execution pauses at `awaiting_approval` with a 30-second timeout. Displays an Omarchy/Liquid Approval Card in QML with Enter/Esc shortcuts, clickable buttons, and voice approval (`"yes"`, `"approve"`, `"cancel"`). Rejected actions halt gracefully without side effects. |
+| **Auto-Recording Actions into Reusable Routines** | `simulang-recipes` & `simulang/compiler/recorder.ts`<br>Monitors verified user/agent interactions, compiles observed action sequences into parameterized workflows, and persists executable definitions. | **`hyprash/recording.py`, `hyprash/routines.py` & `hyprash/backend.py`**:<br>`SessionActionRecorder` ring buffer (30 actions) logs verified actions. Users can speak `"start recording routine"`, perform actions, `"stop recording routine"`, or `"save that as my morning routine"`. `infer_routine_preconditions()` infers environmental prerequisites (`browser`, `vault`, `notes`, `app`) and writes validated JSON definitions directly to `data/routines/<slug>.json`. |
 
 ## Phase 1 — Observable execution and verified outcomes
 
@@ -376,18 +379,28 @@ Phase 6: Measure end-to-end latency across speech, local Laya decision, browser,
 - `ui/shell.qml`: Reactive orb modes (`working` during `executing`, `acting`, and `verifying`) and responsive headline updates.
 - `tests/test_nlu.py`: 35+ table-driven tests for normalization, compound splitting, tab variations, search variations, Spotify/YouTube playback, cancellation, unsupported safety checks, and context TTL.
 - `tests/test_browser_reliability.py`: 10 tests for handshake, tab-ID bindings, follow-up reuse, closed tab rejection, and search context validation.
-- `tests/test_plans.py`: Added DAG recovery, dependent step skipping, and binding propagation tests.
+- `tests/test_plans.py`: DAG recovery, dependent step skipping, risk assessment, and binding propagation tests.
+- `hyprash/speech.py`: Added `--clipboard` flag to `voxtype record start` to override default `[output] mode = "type"` in `~/.config/voxtype/config.toml`, completely preventing Voxtype from simulating keystrokes (`" ."`) into active windows during speech dictation.
+- `hyprash/recording.py`: `SessionActionRecorder` ring buffer capturing executed actions with labels, `infer_routine_preconditions()`, and `compile_routine()` persisting validated user routines to `data/routines/<slug>.json`.
+- `ui/ActionTimeline.qml`: Live execution trace component displaying step status (`pending`, `running`, `awaiting_approval`, `verified`, `failed`, `skipped`), domain badges, duration ms, and theme integration (`omarchy`/`liquid`).
+- `ui/shell.qml`: Integrated `ActionTimeline.qml` and the **Approval Card** (`⚠ APPROVAL REQUIRED`, reason, 30s timeout, Enter/Esc keyboard focus, and Approve/Reject buttons).
+- `tests/test_conversational_nlu.py`: 41 comprehensive tests for slang, entity-preserving filler removal, disfluency repairs, compound utterances, contextual follow-ups, and empty speech guards.
+- `tests/test_multistep_dag.py`: 7 tests covering Tab-ID runtime propagation, fault isolation, ABORT_DEPENDENT vs ABORT_ALL, subtask DAG decomposition, and risk assessment.
+- `tests/test_simular_features.py`: 11 tests covering timeline update event lifecycle, HITL approval granted/rejected/voice resolution, routine precondition inference, ring buffer, and voice-driven routine recording.
 
-### Checks run — 2026-10-14
+### Checks run — 2026-10-15
 
 | Check | Result | What this establishes |
 | --- | --- | --- |
-| `.venv/bin/python -m unittest discover -s tests` | PASS, 121 tests | NLU resolution, browser reliability contract, DAG execution, routines, and all prior regression gates |
+| `.venv/bin/python -m unittest discover -s tests` | PASS, 183 tests | Slang/conversational NLU, disfluency repair, tab-ID continuity, DAG isolation, HITL approval, Action Timeline events, routine recording, and all regression suites |
 | `node --test tests/execution.mjs` | PASS | Bounded retries, one-time mutations, immediate cancellation checks |
 | `node tests/browser_workflows.mjs` | PASS | Ordered workflows, tab ownership, no duplicate actions after uncertain clicks |
 | `node tests/browser_controls.mjs` | PASS, isolated Brave | Named controls, field verification, Spotify track matching, and GitHub navigation |
+| `node --test tests/test_orbs.mjs` | PASS, 9 tests | Orb geometry engines produce finite, correct coordinate outputs across all states |
 | `node --check browser-extension/*.js` | PASS | Extension JavaScript syntax verification |
 | `python -m py_compile hyprash/*.py scripts/*.py tests/*.py` | PASS | Clean bytecode compilation across all Python sources |
+| `qmllint ui/ActionTimeline.qml` | PASS | Zero QML syntax or type errors in Action Timeline component |
+| `./hyprash.sh status` | PASS, live | Active QML shell running on Wayland; reports `timelineSteps: []` and `hasApproval: false` cleanly |
 | `.venv/bin/python scripts/check_latency.py` | PASS, 90 samples | Validated monotonic latencies across all 6 pipeline stages |
 
 ### Measured Latency Profile
@@ -406,3 +419,5 @@ Benchmarked across 90 command evaluations on Arch Linux (CPU inference):
 
 - **Tier 1 (Deterministic Rules) Resolved:** 100% of benchmark queries resolved in <0.1 ms without incurring Laya CPU latency.
 - **Tier 2 (Laya Fallback):** Reserved for unclassified conversational utterances upfront, never invoked in tight execution loops.
+- **Voxtype Typing Elimination:** Passing `--clipboard` completely prevents typing leaks into active applications during speech recognition.
+- **Context Preservation:** Working memory and Tab-ID continuity are retained across microphone toggle turns without memory wipes during active 5-minute search contexts.

@@ -24,7 +24,12 @@ ShellRoot {
     property int inferenceMs: 0
     property var lastExecution: ({})
     property bool reducedMotion: Quickshell.env("HYPRASH_REDUCED_MOTION") === "1"
-    property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError
+    property var timelineSteps: []
+    property string timelinePlanId: ""
+    property string timelineStatus: "idle"
+    property var pendingApproval: null
+    property bool hasApproval: pendingApproval !== null
+    property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError || hasApproval || (timelineSteps && timelineSteps.length > 0)
     property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
     property string headline: engine.indexOf("loading") !== -1 ? "Loading Laya…" : state === "error" ? "Needs attention" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "On it." : activity === "transcribing" ? "Transcribing…" : "Thinking…") : state === "loading" ? "Getting ready…" : listening ? "I’m listening." : "Ready to listen."
     property var theme: ({
@@ -41,9 +46,9 @@ ShellRoot {
         if (!backend.running) { state = "error"; message = "Backend unavailable. Restart Hyprash."; return }
         if (listening) send({command: "finish"})
         else if (busy) send({command: "stop"})
-        else { transcript = ""; lastAction = ""; send({command: "listen"}) }
+        else { transcript = ""; lastAction = ""; pendingApproval = null; timelineSteps = []; send({command: "listen"}) }
     }
-    function hide() { send({command: "stop"}); opened = false; typing = false }
+    function hide() { send({command: "stop"}); opened = false; typing = false; pendingApproval = null }
     function handle(event) {
         if (event.type === "theme") theme = event.theme
         if (event.type === "activity") { activity = event.state; busy = activity !== "idle"; activityMessage = event.message || "" }
@@ -54,6 +59,13 @@ ShellRoot {
         if (event.type === "level") level = event.value
         if (event.type === "transcript" && event.text) transcript = event.text
         if (event.type === "action") { lastAction = event.message; actionError = !!event.error }
+        if (event.type === "timeline_update") {
+            timelinePlanId = event.plan_id || ""
+            timelineStatus = event.status || ""
+            timelineSteps = event.steps || []
+        }
+        if (event.type === "approval_request") pendingApproval = event
+        if (event.type === "approval_resolved") pendingApproval = null
         if (event.type === "ui_control") { let result = event.window === "Hyprash · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)
         if (event.type === "camera") { camera.visible = true; if (event.capture) camera.takePhoto() }
@@ -80,14 +92,16 @@ ShellRoot {
         function hide(): void { root.hide() }
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }
         function appearance(name: string): void { root.send({command: "theme", name: name}) }
-        function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, activityMessage: root.activityMessage, execution: root.lastExecution, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs}) }
+        function approve(approvalId: string): void { root.send({command: "approve", id: approvalId}) }
+        function reject(approvalId: string): void { root.send({command: "reject", id: approvalId}) }
+        function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, activityMessage: root.activityMessage, execution: root.lastExecution, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs, timelineSteps: root.timelineSteps, hasApproval: root.hasApproval}) }
         function quit(): void { root.send({command: "stop"}); Qt.quit() }
     }
     PanelWindow {
         id: panel
         visible: root.opened || surface.reveal > 0.001
         implicitWidth: Math.min(500, screen.width)
-        implicitHeight: 250
+        implicitHeight: Math.max(250, root.hasApproval ? 380 : (root.timelineSteps && root.timelineSteps.length > 0) ? 340 : 250)
         mask: Region { item: inputRegion }
         Item {
             id: inputRegion
@@ -102,12 +116,14 @@ ShellRoot {
         color: "transparent"
         WlrLayershell.namespace: "hyprash"
         WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.keyboardFocus: root.typing ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+        WlrLayershell.keyboardFocus: (root.typing || root.hasApproval) ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
         LiquidSurface {
             id: surface
             anchors.fill: parent
             targetWidth: Math.min(root.expanded ? 472 : 436, panel.width - 24)
-            targetHeight: root.typing ? 190 : root.expanded ? 142 : 84
+            targetHeight: root.hasApproval ? ((root.timelineSteps && root.timelineSteps.length > 0) ? 340 : 250) :
+                          (root.timelineSteps && root.timelineSteps.length > 0) ? Math.min(280, 142 + root.timelineSteps.length * 28) :
+                          (root.typing ? 190 : root.expanded ? 142 : 84)
             reducedMotion: root.reducedMotion
             edge: root.actionError ? root.theme.error : root.busy ? root.theme.accent : root.theme.border
             cornerRadius: root.theme.radius
@@ -224,6 +240,105 @@ ShellRoot {
                         if (text.trim()) { root.typing = false; root.send({command: "text", text: text}); text = "" }
                     }
                     Keys.onEscapePressed: root.hide()
+                }
+                ActionTimeline {
+                    id: timelineView
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8; Layout.rightMargin: 8
+                    theme: root.theme
+                    steps: root.timelineSteps
+                    planId: root.timelinePlanId
+                    overallStatus: root.timelineStatus
+                    visible: root.timelineSteps && root.timelineSteps.length > 0
+                }
+                Rectangle {
+                    id: approvalCard
+                    visible: root.hasApproval
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 8; Layout.rightMargin: 8
+                    Layout.preferredHeight: 82
+                    radius: root.theme.controlRadius || 2
+                    color: root.theme.surface || "#22201d"
+                    border.color: root.theme.accent || "#fe8019"
+                    border.width: 1
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Text {
+                                text: "⚠ APPROVAL REQUIRED"
+                                font.pixelSize: 9; font.family: root.theme.font; font.weight: Font.Bold
+                                color: root.theme.accent || "#fe8019"
+                            }
+                            Item { Layout.fillWidth: true }
+                            Text {
+                                text: "Voice 'approve'/'reject' or click"
+                                font.pixelSize: 8; font.family: root.theme.font
+                                color: root.theme.muted || "#928374"
+                            }
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: root.pendingApproval ? (root.pendingApproval.reason || "Approve action execution?") : ""
+                            font.pixelSize: 10; font.family: root.theme.font
+                            color: root.theme.foreground || "#d5c4a1"
+                            elide: Text.ElideRight
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Button {
+                                id: approveBtn
+                                Layout.fillWidth: true
+                                text: "Approve (Enter)"
+                                font.pixelSize: 10; font.family: root.theme.font
+                                palette.buttonText: root.theme.background || "#090704"
+                                background: Rectangle {
+                                    color: approveBtn.hovered ? (root.theme.foreground || "#d5c4a1") : (root.theme.success || "#8ec07c")
+                                    radius: root.theme.controlRadius || 2
+                                }
+                                onClicked: {
+                                    if (root.pendingApproval) {
+                                        root.send({command: "approve", id: root.pendingApproval.approval_id});
+                                    }
+                                }
+                            }
+
+                            Button {
+                                id: rejectBtn
+                                Layout.fillWidth: true
+                                text: "Reject (Esc)"
+                                font.pixelSize: 10; font.family: root.theme.font
+                                palette.buttonText: root.theme.foreground || "#d5c4a1"
+                                background: Rectangle {
+                                    color: rejectBtn.hovered ? (root.theme.hover || "#302e29") : "transparent"
+                                    border.color: root.theme.border || "#725f4d"
+                                    radius: root.theme.controlRadius || 2
+                                }
+                                onClicked: {
+                                    if (root.pendingApproval) {
+                                        root.send({command: "reject", id: root.pendingApproval.approval_id});
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    focus: root.hasApproval
+                    Keys.onReturnPressed: {
+                        if (root.pendingApproval) root.send({command: "approve", id: root.pendingApproval.approval_id})
+                    }
+                    Keys.onEscapePressed: {
+                        if (root.pendingApproval) root.send({command: "reject", id: root.pendingApproval.approval_id})
+                    }
                 }
             }
         }

@@ -18,9 +18,65 @@ UNSUPPORTED_VERB = re.compile(
     r'shut ?down|restart|reboot|format|destroy)\b', re.I)
 
 
+SENSITIVE_WORDS = re.compile(
+    r'\b(?:delete|remove|send|submit|purchase|buy|checkout|close all|clear|overwrite|log out|logout|pay)\b',
+    re.I
+)
+
+
+def assess_step_risk(kind_or_action: Any, value: str | None = None, confidence: float = 1.0) -> tuple[str, bool, str]:
+    """Classify step into SAFE_READ, SAFE_NAVIGATE, STATE_MUTATING, or SENSITIVE_DESTRUCTIVE."""
+    if isinstance(kind_or_action, Action):
+        kind = kind_or_action.kind
+        value = kind_or_action.value
+    else:
+        kind = str(kind_or_action)
+        value = str(value or "")
+
+    # 1. Borderline model confidence
+    if 0.55 <= confidence < 0.72:
+        return "SENSITIVE_DESTRUCTIVE", True, f"Borderline model confidence ({round(confidence*100)}%)"
+
+    # 2. Check value for sensitive actions
+    if kind == "ui_control":
+        try:
+            task = json.loads(value)
+            target = str(task.get("target", ""))
+            action = str(task.get("action", ""))
+            if SENSITIVE_WORDS.search(target) or SENSITIVE_WORDS.search(action):
+                return "SENSITIVE_DESTRUCTIVE", True, f"Sensitive control action: {target or action}"
+        except Exception:
+            pass
+    elif kind == "web_task":
+        try:
+            task = json.loads(value)
+            action = task.get("action", "")
+            target = str(task.get("target", ""))
+            if SENSITIVE_WORDS.search(target) or SENSITIVE_WORDS.search(action):
+                return "SENSITIVE_DESTRUCTIVE", True, f"Sensitive browser action: {target or action}"
+            if action in ("new_tab", "navigate", "search"):
+                return "SAFE_NAVIGATE", False, ""
+            if action in ("play", "next_track"):
+                return "STATE_MUTATING", False, ""
+        except Exception:
+            pass
+    elif kind in ("write", "new_note"):
+        if SENSITIVE_WORDS.search(value):
+            return "SENSITIVE_DESTRUCTIVE", True, f"Modifying/overwriting note: {value[:30]}"
+        return "STATE_MUTATING", False, ""
+    elif kind in ("obsidian_note", "photo", "browser_type", "browser_key", "routine"):
+        return "STATE_MUTATING", False, ""
+    elif kind in ("open", "url", "address"):
+        return "SAFE_NAVIGATE", False, ""
+
+    return "SAFE_READ", False, ""
+
+
 @dataclass(frozen=True, eq=False)
 class PlanStep(Action):
     step_id: str = "step_1"
+    subtask_id: str = "subtask_1"
+    domain_scope: str = "general"
     target_domain: str = "general"
     depends_on: tuple[str, ...] = field(default_factory=tuple)
     idempotency: str = "IDEMPOTENT"  # "IDEMPOTENT" | "NON_IDEMPOTENT"
@@ -30,6 +86,9 @@ class PlanStep(Action):
     target_tab_id: int | None = None
     output_binding: str | None = None
     input_bindings: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    risk_level: str = "SAFE_NAVIGATE"
+    requires_approval: bool = False
+    approval_reason: str = ""
 
     @property
     def action_type(self) -> str:
@@ -52,21 +111,27 @@ class PlanStep(Action):
         return hash((self.kind, self.value, self.offset))
 
     @classmethod
-    def from_action(cls, action: Any, step_id: str = "step_1") -> "PlanStep":
+    def from_action(cls, action: Any, step_id: str = "step_1", subtask_id: str = "subtask_1") -> "PlanStep":
         kind = getattr(action, "kind", getattr(action, "action_type", ""))
         value = getattr(action, "value", getattr(action, "action_value", ""))
         offset = getattr(action, "offset", 0)
         domain, idemp, pre, post = _infer_step_attributes(kind, value)
+        risk, req_appr, reason = assess_step_risk(kind, value)
         return cls(
             kind=kind,
             value=value,
             offset=offset,
             step_id=step_id,
+            subtask_id=subtask_id,
+            domain_scope=domain,
             target_domain=domain,
             idempotency=idemp,
             preconditions=tuple(pre),
             postconditions=tuple(post),
             on_failure="ABORT_ALL",
+            risk_level=risk,
+            requires_approval=req_appr,
+            approval_reason=reason,
         )
 
 
@@ -211,10 +276,11 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
         masked = re.sub(kp, protect_phrase, masked, flags=re.I)
 
     boundary = (
-        r'\s+(?:and\s+then|then|after\s+that)\s+|\s*;\s*|'
-        r'\s+and\s+(?=(?:open|create|make|write|add|take|search|play|go|visit|launch|'
-        r'click|select|focus|type|enter|press|hit|reload|switch|find|delete|send|'
-        r'upload|install|remove|close|stop|rename|download|run|start|execute)\b)'
+        r'\s+(?:and\s+then|then|after\s+that|once that\'s done|next)\s+|\s*;\s*|'
+        r'\s+and\s+(?=(?:open|create|make|write|add|take|search|look|play|put|blast|'
+        r'go|visit|launch|fire|spin|bring|hop|click|select|focus|type|enter|press|'
+        r'hit|reload|switch|find|delete|send|upload|install|remove|close|stop|'
+        r'rename|download|run|start|execute|gimme|give)\b)'
     )
     chunks = re.split(boundary, masked, flags=re.I)
     if any(not chunk.strip() for chunk in chunks) or len(chunks) > 8:
@@ -225,9 +291,21 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
             value = value.replace(key, literal)
         return value
 
+    active_context = ConversationContext(
+        active_tab_id=context.active_tab_id if context else None,
+        last_active_tab_id=context.last_active_tab_id if context else None,
+        active_site=context.active_site if context else None,
+        active_url=context.active_url if context else None,
+        last_intent=context.last_intent if context else None,
+        search_context=dict(context.search_context) if context and context.search_context else None,
+        active_app=context.active_app if context else None,
+        media_state=context.media_state if context else None,
+    )
+
     result: list[tuple[str, PlanStep]] = []
     i = 0
     step_counter = 1
+    subtask_counter = 1
 
     while i < len(chunks):
         clause = chunks[i].strip()
@@ -253,29 +331,40 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
                 break
 
         if action is None:
-            candidate = re.sub(r'^(?:please |can you |could you |would you |i want you to |let\'s )', '', clause, flags=re.I)
-            candidate = re.sub(r'\s+(?:for me|for us|right now|please)$', '', candidate, flags=re.I)
-            parsed = parse(candidate, final=True, context=context)
-            start = START.search(candidate)
-            if len(parsed) != 1:
-                if UNSUPPORTED_VERB.search(candidate):
-                    raise ValueError('Unsupported step. Nothing was run.')
-                if re.search(r'\b(?:run|start|execute)\b.*\broutine\b', candidate, re.I):
+            candidate = re.sub(r'^(?:please |can you |could you |would you |i want you to |let\'s |yo bro |yo |bro )', '', clause, flags=re.I)
+            candidate = re.sub(r'\s+(?:for me real quick|real quick|for me|for us|right now|please)$', '', candidate, flags=re.I)
+
+            # Check unsupported OS / system verbs first
+            if UNSUPPORTED_VERB.search(candidate):
+                raise ValueError('Unsupported step. Nothing was run.')
+            if re.search(r'\b(?:run|start|execute)\b.*\broutine\b', candidate, re.I):
+                from hyprash.routines import get_routine
+                m_r = re.search(r'\b(?:run|start|execute)(?: the)? (?:routine )?([a-z0-9_ -]+?)(?: routine)?$', candidate, re.I)
+                r_name = m_r[1].strip() if m_r else ""
+                if not get_routine(r_name):
                     raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
-                # Preserve the small, existing natural-language route for a single clause
-                if start is None and len(chunks) == 1:
-                    resolved = resolve_intent(candidate, context)
-                    if resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify"):
-                        action = Action(resolved.action_kind, resolved.action_value)
-                    else:
-                        result.append((restore(clause), None))
-                        break
+
+            # Check NLU Tier 1 intent resolution with active_context
+            resolved = resolve_intent(candidate, active_context)
+            if resolved.intent_type == "unsupported":
+                raise ValueError('Unsupported step. Nothing was run.')
+            if resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify") and resolved.confidence >= 0.85:
+                action = Action(resolved.action_kind, resolved.action_value)
+            else:
+                # 2. Try parse()
+                parsed = parse(candidate, final=True, context=active_context)
+                start = START.search(candidate)
+                if len(parsed) == 1:
+                    if start and start.start() != 0 and not workflow(candidate):
+                        raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+                    action = parsed[0]
+                elif resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify"):
+                    action = Action(resolved.action_kind, resolved.action_value)
+                elif start is None and len(chunks) == 1:
+                    result.append((restore(clause), None))
+                    break
                 else:
                     raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
-            else:
-                if start and start.start() != 0 and not workflow(candidate):
-                    raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
-                action = parsed[0]
 
             fixed = {
                 'photo': r'take(?: a)? (?:picture|photo|selfie)(?: of me)?',
@@ -289,6 +378,26 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
                 from hyprash.routines import get_routine
                 if not get_routine(action.value):
                     raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
+
+        # Update active_context for subsequent clauses in the same compound plan
+        if action.kind in ('open', 'url'):
+            if action.kind == 'open':
+                active_context.active_app = action.value
+            elif action.kind == 'url':
+                active_context.active_url = action.value
+                for s in SITES:
+                    if s in action.value:
+                        active_context.active_site = s
+                        break
+        elif action.kind == 'web_task':
+            try:
+                t_obj = json.loads(action.value)
+                if t_obj.get('site'):
+                    active_context.active_site = t_obj['site']
+                if t_obj.get('action') == 'search':
+                    active_context.set_search_context(1, t_obj.get('url', ''), t_obj.get('site', 'google'), t_obj.get('query', ''))
+            except Exception:
+                pass
 
         value = action.value
         if action.kind in ('web_task', 'ui_control', 'obsidian_note'):
@@ -310,6 +419,13 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
         step_id = f"step_{step_counter}"
         domain, idemp, pre, post = _infer_step_attributes(action.kind, value)
 
+        # Subtask isolation: if domain switches (e.g. youtube -> spotify), bump subtask_counter
+        if result:
+            prev_domain = result[-1][1].target_domain
+            if domain != prev_domain and not (prev_domain == "browser:general" and domain.startswith("browser:")):
+                subtask_counter += 1
+        subtask_id = f"subtask_{subtask_counter}"
+
         deps: list[str] = []
         input_binds: list[tuple[str, str]] = []
         output_bind = None
@@ -317,24 +433,28 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
         if action.kind == "web_task" and '"action": "new_tab"' in value:
             output_bind = "tab_id"
 
-        # Connect dependencies and bindings within the plan
+        # Connect dependencies and bindings within the SAME subtask
         if result:
             prev_clause, prev_step = result[-1]
-            if prev_step:
+            if prev_step and prev_step.subtask_id == subtask_id:
                 # Tab creation followed by search/navigation in browser:
                 if prev_step.action_type == "web_task" and '"action": "new_tab"' in prev_step.action_value:
                     if domain.startswith("browser:"):
                         deps.append(prev_step.step_id)
                         input_binds.append(("target_tab_id", f"{prev_step.step_id}.tab_id"))
-                # Note creation followed by title or write:
+                elif prev_step.target_domain == domain:
+                    deps.append(prev_step.step_id)
                 elif prev_step.action_type in ("open", "new_note") and action.kind in ("title", "write"):
                     deps.append(prev_step.step_id)
 
+        risk, req_appr, reason = assess_step_risk(action.kind, value)
         plan_step = PlanStep(
             kind=action.kind,
             value=value,
             offset=getattr(action, "offset", 0),
             step_id=step_id,
+            subtask_id=subtask_id,
+            domain_scope=domain,
             target_domain=domain,
             depends_on=tuple(deps),
             idempotency=idemp,
@@ -343,6 +463,9 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
             on_failure="ABORT_DEPENDENT",
             output_binding=output_bind,
             input_bindings=tuple(input_binds),
+            risk_level=risk,
+            requires_approval=req_appr,
+            approval_reason=reason,
         )
 
         result.append((restore(clause), plan_step))
