@@ -355,8 +355,12 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         idx = ORDINALS.get(ordinal_key, int(ordinal_key) if ordinal_key.isdigit() else 1)
         is_play = norm.lower().startswith("play ")
         entities = {"index": idx, "play": is_play}
-        if context and context.search_context:
+        task = {"action": "result", "index": idx}
+        if is_play:
+            task["play"] = True
+        if context and context.search_context and context.search_context.get("tabId"):
             entities["target_tab_id"] = context.search_context.get("tabId")
+            task["target_tab_id"] = context.search_context.get("tabId")
         return ResolvedIntent(
             intent_type="result",
             entities=entities,
@@ -364,7 +368,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             raw_text=raw,
             normalized_text=norm,
             action_kind="web_task",
-            action_value=json.dumps({"action": "result", "index": idx, **({"play": True} if is_play else {})}),
+            action_value=json.dumps(task),
         )
 
     # 10. Spotify Next track follow-up ("play another song", "next track", "skip this song")
@@ -481,12 +485,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     m = re.fullmatch(r'(?:search for|look up|find online|look online for|search the web for|search|find) (.+?)(?: online)?', norm, re.I)
     if m:
         query = m[1].strip()
-        task = {"action": "search", "site": "google", "query": query}
+        site = context.active_site if (context and context.active_site in ('google', 'youtube', 'spotify')) else "google"
+        task = {"action": "search", "site": site, "query": query}
         if context and context.active_tab_id:
             task["target_tab_id"] = context.active_tab_id
         return ResolvedIntent(
             intent_type="search",
-            entities={"site": "google", "query": query},
+            entities={"site": site, "query": query},
             confidence=0.94,
             raw_text=raw,
             normalized_text=norm,

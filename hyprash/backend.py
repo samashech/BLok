@@ -427,10 +427,12 @@ class Backend:
             if event.get('status') == 'running':
                 self.emit(type="activity", state="executing", message=event['message'])
         result=browser.request(task,on_progress=progress)
-        if action == 'new_tab' and result.get('verified'):
+        if action in ('new_tab', 'navigate', 'search', 'play', 'next_track') and result.get('verified'):
             tab_id = result.get('tab_id') or result.get('tabId')
-            if tab_id:
-                self.context.update_tab(tab_id, url=result.get('url'))
+            url = result.get('url') or task.get('url')
+            site = task.get('site')
+            if tab_id or url or site:
+                self.context.update_tab(tab_id, url=url, site=site)
         if action == 'search' and result.get('verified') and task.get('site') in ('google','youtube'):
             context=result.get('context')
             if context and (context.get('tabId') == result.get('tabId') or context.get('tab_id') == result.get('tab_id')) and context.get('url') == result.get('url'):

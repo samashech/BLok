@@ -166,5 +166,60 @@ class SearchContextTtlAndValidationTests(unittest.TestCase):
             self.assertIsNone(self.backend.browser_context)
 
 
+class StateContinuityAndRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.backend = Backend()
+        self.backend.emit = Mock()
+        self.backend.worker_context.generation = self.backend.generation
+
+    def test_blank_tab_reused_without_spawning_duplicate(self):
+        """When the current active tab is blank, search navigates inside it instead of spawning a new tab."""
+        self.backend.context.update_tab(tab_id=303, url='chrome://newtab/')
+
+        recorded_tasks = []
+        def mock_request(task, on_progress=None):
+            recorded_tasks.append(task)
+            return {'verified': True, 'tab_id': 303, 'message': 'Searched Google for games'}
+
+        with patch.object(browser_mod, 'request', side_effect=mock_request):
+            resolved = resolve_intent("search for games", context=self.backend.context)
+            self.assertEqual(json.loads(resolved.action_value).get('target_tab_id'), 303)
+            self.backend.execute(Action(resolved.action_kind, resolved.action_value))
+            self.assertEqual(len(recorded_tasks), 1)
+            self.assertEqual(recorded_tasks[0].get('target_tab_id'), 303)
+
+    def test_uncertain_state_does_not_repeat_non_idempotent_actions(self):
+        """A timeout or lost ACK in a step marks failure and does not repeat mutations."""
+        step1 = PlanStep(
+            kind='web_task',
+            value=json.dumps({'action': 'play', 'site': 'spotify', 'query': 'baby'}),
+            step_id='step_1',
+            target_domain='browser:spotify',
+            idempotency='NON_IDEMPOTENT',
+            on_failure='ABORT_ALL'
+        )
+        step2 = PlanStep(
+            kind='open',
+            value='terminal',
+            step_id='step_2',
+            target_domain='desktop:terminal'
+        )
+        plan = Plan((step1, step2))
+
+        # First step raises a timeout (lost ACK)
+        call_count = [0]
+        def mock_exec(act):
+            call_count[0] += 1
+            return False
+
+        self.backend.execute = Mock(side_effect=mock_exec)
+        result = self.backend.execute_plan(plan)
+        self.assertFalse(result)
+        # Verify non-idempotent action was executed once and halted
+        self.assertEqual(call_count[0], 1)
+        self.assertEqual(self.backend.last_execution_report.overall_status, 'failed')
+        self.assertEqual(self.backend.last_execution_report.failed_steps, [{'step_id': 'step_1', 'stage': 'act'}])
+
+
 if __name__ == '__main__':
     unittest.main()

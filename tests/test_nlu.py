@@ -239,6 +239,54 @@ class ContextualContinuationTests(unittest.TestCase):
         ctx.clear_search_context()
         self.assertFalse(ctx.is_search_context_valid())
 
+    def test_multi_turn_episodic_working_memory_sequence(self):
+        """Simulate multi-turn interaction:
+        'Open YouTube' -> 'Search for Justin Bieber' -> 'Play the first video' -> 'Now open Spotify' -> 'Play something else'
+        """
+        ctx = ConversationContext()
+
+        # Turn 1: Open YouTube
+        res1 = resolve_intent("Open YouTube", context=ctx)
+        self.assertEqual(res1.intent_type, "navigate")
+        self.assertEqual(res1.action_value, "https://www.youtube.com")
+        ctx.update_tab(tab_id=101, url="https://www.youtube.com", site="youtube")
+
+        # Turn 2: Search for Justin Bieber (contextually inherits YouTube site and tab 101)
+        res2 = resolve_intent("Search for Justin Bieber", context=ctx)
+        self.assertEqual(res2.intent_type, "search")
+        task2 = json.loads(res2.action_value)
+        self.assertEqual(task2.get("site"), "youtube")
+        self.assertEqual(task2.get("query"), "Justin Bieber")
+        self.assertEqual(task2.get("target_tab_id"), 101)
+        ctx.set_search_context(tab_id=101, url="https://www.youtube.com/results?search_query=Justin+Bieber",
+                               site="youtube", query="Justin Bieber")
+
+        # Turn 3: Play the first video (selects video 1 in tab 101)
+        res3 = resolve_intent("Play the first video", context=ctx)
+        self.assertEqual(res3.intent_type, "result")
+        task3 = json.loads(res3.action_value)
+        self.assertEqual(task3.get("index"), 1)
+        self.assertTrue(task3.get("play"))
+        self.assertEqual(task3.get("target_tab_id"), 101)
+
+        # Turn 4: Now open Spotify (switches active site to Spotify)
+        res4 = resolve_intent("Now open Spotify", context=ctx)
+        self.assertEqual(res4.intent_type, "navigate")
+        self.assertEqual(res4.action_value, "https://open.spotify.com")
+        ctx.update_tab(tab_id=102, url="https://open.spotify.com", site="spotify")
+
+        # Turn 5: Play something else (executes next_track on Spotify)
+        res5 = resolve_intent("Play something else", context=ctx)
+        self.assertEqual(res5.intent_type, "next_track")
+        task5 = json.loads(res5.action_value)
+        self.assertEqual(task5.get("action"), "next_track")
+        self.assertEqual(task5.get("site"), "spotify")
+
+        # Turn 6: Bare "Play something else" without media context requires clarification
+        res6 = resolve_intent("Play something else", context=ConversationContext())
+        self.assertTrue(res6.requires_clarification)
+        self.assertEqual(res6.intent_type, "clarify")
+
 
 if __name__ == "__main__":
     unittest.main()
