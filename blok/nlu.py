@@ -705,6 +705,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             action_kind="tool", action_value=json.dumps({"tool": "plugin", "name": item.name, "args": args}),
         )
 
+    # Reading the screen: page text or OCR ("summarize this", "what's this error?")
+    from blok import screen
+    looked = screen.intent(norm)
+    if looked:
+        return ResolvedIntent(intent_type="screen:" + looked["ask"], entities=looked, confidence=0.95,
+                              raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(looked))
+
     # Window choreography: arrange apps, saved setups, focus mode, window questions
     from blok import choreo
     arranged = choreo.intent(norm)
@@ -919,6 +926,10 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             task = {'action': 'click', 'target': 'Search', 'role': 'field'}
         else:
             task = {'action': 'click', 'target': target}
+            # "the blue Download button": the color picks between same-named controls.
+            colored = re.match(r'(red|orange|yellow|green|blue|purple|pink|black|white|gr[ae]y)\s+(.+)', target, re.I)
+            if colored:
+                task.update(target=colored[2], color=colored[1].lower().replace('grey', 'gray'))
         return ResolvedIntent(
             intent_type="ui_control",
             entities=task,

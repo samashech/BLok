@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -103,6 +104,36 @@ class Speaker:
         if chosen in ('off', 'local') or (chosen == 'kokoro' and kokoro_available()) or (chosen == 'elevenlabs' and api_key()):
             return chosen
         return 'elevenlabs' if api_key() else 'kokoro' if kokoro_available() else 'local'
+
+    def read_aloud(self, text: str, voice: str | None = None, lang: str | None = None):
+        """Read long text sentence by sentence; any new speech, or stop(), ends it."""
+        chunks, current = [], ''
+        for part in re.split(r'(?<=[.!?])\s+|\n+', text):
+            part = part.strip()
+            if not part:
+                continue
+            if current and len(current) + len(part) > 240:
+                chunks.append(current)
+                current = part
+            else:
+                current = (current + ' ' + part).strip()
+        if current:
+            chunks.append(current)
+        if not chunks or self.mode() == 'off':
+            return
+        self.stop()
+        with self.lock:
+            generation = self.generation
+        def run():
+            for chunk in chunks:
+                if not self._current(generation):
+                    return
+                self.next_voice, self.next_lang = voice, lang
+                self._speak(chunk, self.mode(), generation)
+                player = self.player
+                while player and player.poll() is None and self._current(generation):
+                    time.sleep(0.05)
+        threading.Thread(target=run, daemon=True).start()
 
     def speaking(self) -> bool:
         player = self.player

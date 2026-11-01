@@ -48,12 +48,21 @@ export async function pageAction(request, captureErrors=false) {
     return {id:idOf(e),name:controlName,role:roleOf(e),editable:editable(e),disabled:!!(e.disabled||e.getAttribute('aria-disabled')==='true'),fingerprint:[roleOf(e),norm(controlName),e.tagName.toLowerCase(),e.getAttribute('type')||'',href].join('|')};
   };
   const page = () => location.href+'\n'+performance.timeOrigin;
+  const COLORS={red:[220,40,40],orange:[245,140,30],yellow:[240,210,40],green:[40,170,70],blue:[40,100,230],purple:[140,60,200],
+    pink:[235,90,160],black:[20,20,20],white:[245,245,245],gray:[128,128,128]};
+  const rgb=value=>{const m=String(value).match(/[\d.]+/g);return m&&!(m.length>3&&+m[3]===0)?m.slice(0,3).map(Number):null;};
+  const shade=e=>{for(let n=e;n&&n.nodeType===1;n=n.parentElement){const c=rgb(getComputedStyle(n).backgroundColor);if(c)return c;}return [255,255,255];};
+  const closestColor=(items,color)=>{   // background or text color, whichever is nearer the spoken one
+    const want=COLORS[color];const dist=c=>c?(c[0]-want[0])**2+(c[1]-want[1])**2+(c[2]-want[2])**2:1e9;
+    return items.map(e=>[e,Math.min(dist(shade(e)),dist(rgb(getComputedStyle(e).color)))]).sort((a,b)=>a[1]-b[1])[0][0];
+  };
   const findTarget = request => {
     const target=norm(request.target).replace(/^(the )/,'').replace(/ (button|link|field)$/,'');
     const role=request.role || (/ (field|button|link)$/.exec(norm(request.target))||[])[1];
     const eligible=request.action==='fill'||role==='field'?nodes.filter(editable):role==='button'?nodes.filter(e=>roleOf(e)==='button'):role==='link'?nodes.filter(e=>roleOf(e)==='link'):nodes;
     let matches=eligible.filter(e=>norm(name(e))===target);
     if(!matches.length) matches=eligible.filter(e=>norm(name(e)).includes(target));
+    if(matches.length>1&&request.color) matches=[closestColor(matches,request.color)];
     if(matches.length!==1) throw Error(matches.length?'More than one control matches. Say its full label.':'No visible control named '+request.target);
     const e=matches[0];if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
     return e;
@@ -80,6 +89,19 @@ export async function pageAction(request, captureErrors=false) {
     const result={url:location.href,title:document.title,page:page(),controls};
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
+  }
+  if(request.op==='read_page') {
+    // The page's main readable text: the biggest article-like block, without menus and footers.
+    const selection=String(getSelection()||'').trim();
+    const candidates=[...document.querySelectorAll('article,main,[role="main"],#content,#main,.post,.article,.entry-content,#readme,.markdown-body')].filter(visible);
+    let best=document.body;
+    for(const c of candidates)if((c.innerText||'').length>200&&(best===document.body||(c.innerText||'').length>(best.innerText||'').length*0.3))best=c;
+    const copy=best.cloneNode(true);
+    copy.querySelectorAll('nav,header,footer,aside,script,style,noscript,form,[role="navigation"],[aria-hidden="true"],button').forEach(e=>e.remove());
+    document.body.append(copy);copy.style.cssText='position:fixed;left:-99999px;top:0;width:900px';
+    const text=(copy.innerText||copy.textContent||'').replace(/\n{3,}/g,'\n\n').trim();
+    copy.remove();
+    return {url:location.href,title:document.title,selection:selection.slice(0,20000),text:text.slice(0,40000)};
   }
   if(request.op==='hints') {
     // Vimium-style numbered labels on every visible clickable element.

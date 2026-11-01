@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -77,7 +78,11 @@ class Backend:
         if event.get("type") == "action" and getattr(self.worker_context, "in_plan", False):
             self.plan_messages.append(event.get("message", ""))
         elif event.get("type") == "action" and event.get("message"):
-            self.say_result(event["message"], error=bool(event.get("error")))
+            reading, self.read_next = getattr(self, 'read_next', None), None
+            if reading and not event.get("error"):
+                self.speaker.read_aloud(reading)
+            else:
+                self.say_result(event["message"], error=bool(event.get("error")))
 
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
@@ -274,10 +279,14 @@ class Backend:
     def say_result(self, message, error=False):
         """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
         from blok.voice import spoken
-        if getattr(self, 'reply_hinglish', False):
-            from blok import hinglish
-            self.speaker.say(hinglish.reply(message, error=error), voice=os.environ.get('BLOK_HINDI_VOICE', 'hf_alpha'), lang='hi')
+        from blok import hinglish
+        hindi = hinglish.reply(message, error=error, strict=True) if getattr(self, 'reply_hinglish', False) else None
+        if hindi is None and getattr(self, 'reply_hinglish', False) and len(message) < 50:
+            hindi = hinglish.reply(message, error=error)     # short results get "हो गया"
+        if hindi:
+            self.speaker.say(hindi, voice=os.environ.get('BLOK_HINDI_VOICE', 'hf_alpha'), lang='hi')
         else:
+            # Summaries and answers are English content; Hindi pronunciation would garble them.
             self.speaker.say(spoken(message, error=error))
 
     def execute_plan(self, plan):
@@ -481,12 +490,18 @@ class Backend:
                 elif task.get('pointer'):
                     raise RuntimeError('Pointing works in the browser. In other apps, say the button name, like "click Save".')
                 else:
-                    observation=desktop.inspect()
-                    control=desktop.select_control(observation,task)
-                    result=desktop.control({**task,'control':control},owner=observation['owner'])
-                    self.emit(type="execution",verified=result.get('verified',False),
-                              evidence=result.get('evidence',''),trace=[])
-                    message=result['message']
+                    try:
+                        observation=desktop.inspect()
+                        control=desktop.select_control(observation,task)
+                    except RuntimeError as missing:
+                        # Apps without accessibility labels: find the words on screen instead.
+                        if 'disabled' in str(missing) or task.get('action')!='click':raise
+                        message=self.click_by_sight(task['target'])
+                    else:
+                        result=desktop.control({**task,'control':control},owner=observation['owner'])
+                        self.emit(type="execution",verified=result.get('verified',False),
+                                  evidence=result.get('evidence',''),trace=[])
+                        message=result['message']
             elif kind in ("address", "browser_type", "browser_key"):
                 if kind=="browser_key" and value=="new tab":self.browser_task({'action':'new_tab'})
                 elif kind=="browser_key" and value=="enter":
@@ -638,6 +653,8 @@ class Backend:
             return system.media(task['op'])
         if name == 'lock':
             return system.lock()
+        if name == 'screen':
+            return self.screen_tool(task)
         if name in ('arrange', 'layout_save', 'layout_restore', 'layout_list', 'focus', 'where', 'workspace_info', 'close_others'):
             return self.window_tool(name, task)
         if name in ('hints', 'hint', 'scroll', 'type', 'key', 'handsfree'):
@@ -699,13 +716,59 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1')
 
     def browser_in_front(self):
         try:
             return bool(browser.BROWSERS.fullmatch(json.loads(browser.run(['hyprctl', '-j', 'activewindow']) or '{}').get('class', '')))
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
             return False
+
+    def hide_overlay(self, hidden):
+        """Hide the overlay for a screen capture; the short wait lets the compositor redraw."""
+        self.emit(type="capture", hidden=bool(hidden))
+        if hidden:
+            time.sleep(0.15)
+
+    def click_by_sight(self, target):
+        """OCR the window, move the pointer onto the label, and click when ydotool is available."""
+        from blok import screen
+        from blok.plans import SENSITIVE_WORDS
+        label = re.sub(r'\s+(?:button|link|tab|icon|option)$', '', target.strip(), flags=re.I)
+        seen = screen.ocr_window(hide_overlay=self.hide_overlay)
+        box = screen.find_word(seen['words'], label)
+        if not box:
+            raise RuntimeError(f'I can\'t see "{label}" in this window.')
+        x = seen['window']['at'][0] + box['x'] + box['w'] // 2
+        y = seen['window']['at'][1] + box['y'] + box['h'] // 2
+        if SENSITIVE_WORDS.search(label):
+            self.confirm(f'Click "{label}"?', action='click', value=label)
+        browser.run(['hyprctl', 'dispatch', f'hl.dsp.cursor.move({{ x = {x}, y = {y} }})'])
+        if shutil.which('ydotool'):
+            browser.run(['ydotool', 'click', '0xC0'])
+            return f'Clicked {label}'
+        return f'The pointer is on {label}. Clicking in other apps needs ydotool; click it yourself for now.'
+
+    def screen_tool(self, task):
+        """Phase 4: read, summarize or answer questions about what's on screen."""
+        from blok import screen
+        in_browser = self.browser_in_front()
+        if in_browser:
+            self.require_extension('Reading pages', 'phase10-v1')
+        self.emit(type="activity", state="executing", message="Reading the screen…")
+        seen = screen.read_screen(in_browser, hide_overlay=self.hide_overlay)
+        text = seen['selection'] or seen['text']
+        if len(text.strip()) < 20:
+            return "I can't find readable text here."
+        ask = task.get('ask')
+        if ask == 'read':
+            self.read_next = text            # spoken in full by emit(), not the short message
+            return f'Reading {"your selection" if seen["selection"] else seen["title"] or "this"}'
+        if ask == 'summary':
+            return screen.summarize(text)
+        if ask == 'error':
+            return screen.explain_error(seen['text'])
+        return screen.answer(task.get('question', ''), text)
 
     def window_tool(self, name, task):
         """Phase 3: arrange apps, saved setups, focus mode and questions about windows."""
@@ -748,7 +811,7 @@ class Backend:
             return 'Pressed ' + task['key'].lower()
         in_browser = self.browser_in_front()
         if name == 'type':
-            if in_browser and self.extension_version() == 'phase9-v1':
+            if in_browser and self.extension_version() in self.EXTENSION_VERSIONS[2:]:
                 field = browser.request({'action': 'focused_field'})
                 if not field.get('editable'):
                     raise RuntimeError('No text field is selected. Say "show numbers", then the field\'s number.')

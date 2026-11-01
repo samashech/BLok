@@ -29,6 +29,7 @@ ShellRoot {
     property string timelineStatus: "idle"
     property var pendingApproval: null
     property bool handsFree: false
+    property bool capturing: false
     property bool hasApproval: pendingApproval !== null
     property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError || hasApproval || (timelineSteps && timelineSteps.length > 0)
     property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
@@ -67,6 +68,7 @@ ShellRoot {
         }
         if (event.type === "approval_request") pendingApproval = event
         if (event.type === "handsfree") handsFree = !!event.on
+        if (event.type === "capture") capturing = !!event.hidden
         if (event.type === "wake") { opened = true; typing = false }
         if (event.type === "approval_resolved") pendingApproval = null
         if (event.type === "ui_control") { let result = event.window === "BLoK · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
@@ -104,7 +106,7 @@ ShellRoot {
     }
     PanelWindow {
         id: panel
-        visible: root.opened || surface.reveal > 0.001
+        visible: !root.capturing && (root.opened || surface.reveal > 0.001)
         implicitWidth: Math.min(500, screen.width)
         implicitHeight: Math.max(250, root.hasApproval ? 380 : (root.timelineSteps && root.timelineSteps.length > 0) ? 340 : 250)
         mask: Region { item: inputRegion }

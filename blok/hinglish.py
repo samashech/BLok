@@ -69,6 +69,10 @@ RULES: list[tuple[str, str]] = [
     (r'(?:likho|likh\s+do|type\s+karo)\s+(?P<text>.+)', 'type {text}'),
     (r'(?P<text>.+?)\s+' + V['type'], 'type {text}'),
     (r'(?:enter|tab|escape)\s+(?:dabao|daba\s+do|press\s+karo)', 'press {0}'),
+    # Reading the screen
+    (r'(?:ye|yeh|is)?\s*(?:page|article|screen)?\s*(?:ko\s+)?(?:padh\s*(?:ke|kar)\s+sunao|padho|padh\s+do|sunao)', 'read this to me'),
+    (r'(?:ye|yeh)\s+(?:page|article|video|screen)\s+(?:kis\s+(?:baare|bare)\s+(?:mein|me)\s+hai|kya\s+hai)|(?:iska\s+)?(?:summary|saransh)\s+(?:do|batao|bata\s+do)', 'what is this page about'),
+    (r'(?:ye|yeh)?\s*error\s+(?:kya\s+hai|kya\s+keh\s+raha\s+hai|samjhao)|kya\s+galat\s+hua', 'what does this error mean'),
     # Focus mode and window layouts
     (r'focus\s+mode\s+(?:chalu|on|start|shuru)\s+kar(?:o|\s*do)|(?:mujhe\s+)?focus\s+karna\s+hai', 'focus mode'),
     (r'(?P<n>\d+|\w+)\s+minute\s+(?:ke\s+liye\s+)?focus\s+(?:mode\s+)?(?:chalu\s+)?kar(?:o|\s*do|na\s+hai)', 'focus for {n} minutes'),
@@ -344,11 +348,13 @@ REPLIES = [
 ]
 
 
-def reply(message: str, error: bool = False) -> str:
+def reply(message: str, error: bool = False, strict: bool = False) -> str | None:
     """The reply in Hindi (Devanagari) for Kokoro's Hindi mode; the overlay keeps the English details."""
     text = message.strip()
     for pattern, build in REPLIES:
         m = re.fullmatch(pattern, text)
         if m:
             return build(m)
+    if strict:
+        return None
     return 'माफ़ कीजिए, यह नहीं हो पाया' if error else 'हो गया'

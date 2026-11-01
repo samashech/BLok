@@ -123,4 +123,15 @@ try{
  await page.evaluate(pageAction,{op:'hints',show:false});
  await assert.rejects(page.evaluate(pageAction,{op:'hint',n:1}),/Say "show numbers"/);
  console.log('PASS: numbered hints (labels, lookup, stale refusal, clear on scroll) and scrolling');
+ await page.setContent(`<nav>Home About Pricing Login</nav><main><article><h1>Solar panels</h1><p>Solar panels turn sunlight into electricity using photovoltaic cells made of silicon.</p><p>A typical home system costs ₹2,40,000 and pays for itself in about six years.</p></article><aside>Related links</aside></main><footer>Copyright</footer>`);
+ const read=await page.evaluate(pageAction,{op:'read_page'});
+ assert.match(read.text,/photovoltaic/); assert.doesNotMatch(read.text,/Login|Copyright|Related links/);
+ await page.evaluate(()=>{const r=document.createRange();r.selectNodeContents(document.querySelector('p'));getSelection().addRange(r);});
+ assert.match((await page.evaluate(pageAction,{op:'read_page'})).selection,/^Solar panels turn sunlight/);
+ await page.setContent(`<button style="background:#d22" onclick="this.dataset.c='red'">Download</button><button style="background:#2563eb;color:white" onclick="this.dataset.c='blue'">Download</button>`);
+ await assert.rejects(page.evaluate(pageAction,{op:'click',target:'Download'}),/More than one/);
+ await page.evaluate(pageAction,{op:'click',target:'Download',color:'blue'});
+ assert.equal(await page.locator('button').nth(1).getAttribute('data-c'),'blue');
+ assert.equal(await page.locator('button').nth(0).getAttribute('data-c'),null);
+ console.log('PASS: page text without menus, selected text, and "click the blue Download button"');
 }finally{await browser.close();}

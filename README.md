@@ -54,6 +54,21 @@ You don't need to phrase things properly. Fillers, stutters, slang and mid-sente
 
 Anything that changes or deletes something, or that BLoK isn't sure about, shows an approval card first. Say “yes” or press Enter to approve; say “no” or press Esc to cancel.
 
+## It can read your screen
+
+No GPU and no screenshots sent anywhere: in the browser BLoK reads the page's own text through the extension; in other apps it captures just the focused window and reads it with Tesseract OCR (about a second).
+
+| Say | Does |
+|---|---|
+| “what's this page about?” · “summarize this” | a two- or three-sentence summary |
+| “read this to me” | reads the article, or your selected text, aloud; “stop” ends it |
+| “what does this error mean?” (in a terminal or editor) | finds the error on screen and explains it |
+| “what's the price here?” · “on this page, who wrote it?” | answers from the page |
+| “click the blue Download button” | the color picks between same-named buttons |
+| “click Save” in an app without accessibility labels | finds the word on screen and puts the pointer on it (clicks too if `ydotool` is installed) |
+
+With Ollama running, the local Qwen model writes the summaries and explanations; without it BLoK picks the most relevant sentences and recognises prices, dates, emails and phone numbers. Screen text is never stored. In Hinglish: “ye page kis baare mein hai”, “padh ke sunao”, “ye error kya hai”.
+
 ## Your windows, by voice
 
 BLoK speaks Hyprland, so it can arrange your desktop, not just open apps.
@@ -97,7 +112,7 @@ Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for it
 | “scroll down” · “scroll up a little” · “go to the top” | scrolls the page, or the app in front |
 | “hide numbers” · “hands free off” | clears the numbers · stops listening |
 
-It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers need the browser extension updated to `phase9`: reload it in `brave://extensions`, then reload open pages.
+It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers and page reading need the browser extension updated to `phase10`: reload it in `brave://extensions`, then reload open pages.
 
 ## Make it yours
 
