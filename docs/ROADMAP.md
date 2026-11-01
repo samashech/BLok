@@ -146,4 +146,4 @@ mode stays under ~3% in a quiet room.
 | 3 Window choreography | done |
 | 4 Screen understanding | done |
 | 5 MCP server | done |
-| 6 Teach by doing | planned |
+| 6 Teach by doing | done (browser skills; desktop steps still come from routine recording) |

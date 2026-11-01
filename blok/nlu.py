@@ -189,6 +189,7 @@ class ConversationContext:
     active_app: str | None = None
     media_state: dict[str, Any] | None = None
     hints_until: float = 0.0  # numbered hints are showing until this monotonic time
+    watching: bool = False    # "watch me": the browser is recording a skill
     last_executed_plan: Any = None
     awaiting_approval: dict[str, Any] | None = None
 
@@ -711,6 +712,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     if looked:
         return ResolvedIntent(intent_type="screen:" + looked["ask"], entities=looked, confidence=0.95,
                               raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(looked))
+
+    # Taught skills: "watch me", "call it …", and running what was taught
+    from blok import skills
+    taught = skills.intent(norm, bool(context and context.watching))
+    if taught:
+        return ResolvedIntent(intent_type="skill:" + taught["tool"], entities=taught, confidence=0.95,
+                              raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(taught))
 
     # Window choreography: arrange apps, saved setups, focus mode, window questions
     from blok import choreo

@@ -695,6 +695,8 @@ class Backend:
             return system.lock()
         if name == 'screen':
             return self.screen_tool(task)
+        if name in ('watch', 'skill_save', 'skill_run', 'skill_list', 'skill_forget'):
+            return self.skill_tool(name, task)
         if name in ('arrange', 'layout_save', 'layout_restore', 'layout_list', 'focus', 'where', 'workspace_info', 'close_others'):
             return self.window_tool(name, task)
         if name in ('hints', 'hint', 'scroll', 'type', 'key', 'handsfree'):
@@ -756,7 +758,7 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1')
 
     def browser_in_front(self):
         try:
@@ -788,6 +790,48 @@ class Backend:
             browser.run(['ydotool', 'click', '0xC0'])
             return f'Clicked {label}'
         return f'The pointer is on {label}. Clicking in other apps needs ydotool; click it yourself for now.'
+
+    def skill_tool(self, name, task):
+        """Phase 6: learn a browser task by watching, then replay it by name."""
+        from blok import skills
+        if name == 'skill_list':
+            known = skills.all_skills().values()
+            return ('I know: ' + '; '.join(skills.describe(k) for k in known)) if known else 'I haven\'t learned anything yet. Say "watch me".'
+        if name == 'skill_forget':
+            self.confirm(f'Forget the skill "{task["name"]}"?', action='skill_forget', value=task['name'])
+            return f'Forgot {task["name"]}' if skills.forget(task['name']) else f'There is no skill called {task["name"]}.'
+        self.require_extension('Teaching', 'phase11-v1')
+        if name == 'watch' and task.get('on'):
+            if not self.browser_in_front():
+                raise RuntimeError('Switch to the browser page where you want to show me, then say "watch me".')
+            browser.request({'action': 'watch_start'})
+            self.context.watching = True
+            return 'Watching. Do it once in this tab, then say "done, call it" and a name.'
+        if self.context.watching:
+            self.pending_steps = browser.request({'action': 'watch_stop'}).get('steps', [])
+            self.context.watching = False
+        if name == 'watch':
+            count = sum(1 for step in skills.clean_steps(getattr(self, 'pending_steps', None) or []) if step['op'] != 'navigate')
+            return f'Got it, {count} steps. What should I call it? Say "call it" and a name.'
+        if name == 'skill_save':
+            steps = getattr(self, 'pending_steps', None)
+            if not steps:
+                raise RuntimeError('There is nothing to save. Say "watch me" first, then show me.')
+            skill = skills.save(task['name'], steps)
+            self.pending_steps = None
+            hint = f' You can change {", ".join(f["name"] for f in skill["fields"])} when you ask.' if skill['fields'] else ''
+            return f'Learned "{skill["name"]}" ({skills.describe(skill).split("(", 1)[1].rstrip(")")}). Say "{skill["name"]}" to run it.{hint}'
+        skill = skills.all_skills().get(skills.slug(task['name']))
+        if not skill:
+            raise RuntimeError(f'I don\'t know a skill called {task["name"]}. Say "list my skills".')
+        steps = skills.replay_steps(skill, task.get('values') or {})
+        danger = skills.risky(steps)
+        if danger:
+            self.confirm(f'Run "{skill["name"]}"? It will click {", ".join(danger)}.', action='skill_run', value=skill['name'])
+        progress = lambda event: self.emit(type="activity", state="executing", message=event['message']) if event.get('status') == 'running' else None
+        result = browser.request({'action': 'replay', 'steps': steps}, timeout=190, on_progress=progress)
+        self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
+        return f'Done: {skill["name"]}'
 
     def screen_tool(self, task):
         """Phase 4: read, summarize or answer questions about what's on screen."""

@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase10-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase11-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -17,7 +17,8 @@ export async function run(req, progress=()=>{}) {
     return {tabId:current.id,tab_id:current.id,url:current.url,title:current.title,verified:true};
   }
   const {epoch:turn}=await chrome.storage.session.get('epoch');
-  const flow=execution({progress,check:async()=>{
+  // Replaying a taught skill can take a few minutes; everything else keeps the short budget.
+  const flow=execution({progress,budget:req.action==='replay'?170000:undefined,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
     if(turn!==epoch)throw Error('Cancelled');
   }});
@@ -124,6 +125,47 @@ export async function run(req, progress=()=>{}) {
       if(!/^https?:\/\//.test(task.url||''))throw Error('That number is not a link.');
       const created=await chrome.tabs.create({url:task.url,active:true});
       return confirmed('Opened it in a new tab','New tab created',{tabId:created.id});
+    }
+    if(task.action==='watch_start') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Open the page where you want to show me, then say "watch me".');
+      await chrome.storage.session.set({watch:{tabId:tab.id,steps:[{op:'navigate',url:tab.url}]}});
+      await chrome.tabs.sendMessage(tab.id,{type:'blok-watch',on:true}).catch(()=>{});
+      return confirmed('Watching','Recording started in the current tab',{url:tab.url,tabId:tab.id});
+    }
+    if(task.action==='watch_stop') {
+      const {watch}=await chrome.storage.session.get('watch');
+      await chrome.storage.session.remove('watch');
+      if(watch)await chrome.tabs.sendMessage(watch.tabId,{type:'blok-watch',on:false}).catch(()=>{});
+      return {verified:true,message:'Stopped watching',steps:watch?.steps||[]};
+    }
+    if(task.action==='replay') {
+      const steps=task.steps||[];
+      if(!steps.length)throw Error('That skill has no steps.');
+      for(const [i,step] of steps.entries()) {
+        const where='Step '+(i+1)+' of '+steps.length;
+        if(step.op==='navigate') {
+          const current=tab&&/^https?:/.test(tab.url)?new URL(tab.url):null, wanted=new URL(step.url);
+          if(!current||current.origin+current.pathname!==wanted.origin+wanted.pathname)await (tab?navigate(step.url):siteTab(step.url));
+          await loaded();continue;
+        }
+        if(step.op==='secret')throw Error(where+' needs your password for "'+step.name+'". Sign in yourself, then run it again.');
+        if(!tab||!/^https?:/.test(tab.url))throw Error(where+': no web page is open.');
+        await loaded();
+        const found=await flow.observe(where+': finding "'+step.name+'"',()=>page({op:'find_control',name:step.name,role:step.role}),12000);
+        const before=tab.url;
+        if(step.op==='fill') {
+          await flow.act(where+': typing into "'+step.name+'"',()=>page({op:'fill',control:found.control,page:found.page,text:step.value}));
+        } else if(step.op==='enter') {
+          await flow.act(where+': pressing Enter',()=>page({op:'submit',control:found.control,page:found.page}));
+        } else {
+          await flow.act(where+': clicking "'+step.name+'"',()=>page({op:'click',control:found.control,page:found.page}));
+        }
+        // A click may start a navigation; let it settle before looking for the next control.
+        await new Promise(r=>setTimeout(r,500));
+        tab=await chrome.tabs.get(tab.id);
+        if(tab.url!==before||tab.status!=='complete')await loaded();
+      }
+      return confirmed('Did all '+steps.length+' steps','Each control was found and used in order',{url:tab?.url,tabId:tab?.id});
     }
     if(task.action==='pointer') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
@@ -288,6 +330,22 @@ export async function run(req, progress=()=>{}) {
     return {...result,trace:flow.trace};
   }catch(error){error.trace=flow.trace;throw error;}
 }
+// Steps reported by recorder.js while "watch me" is on; only from the watched tab.
+chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+  if(message?.type!=='blok-step'&&message?.type!=='blok-watching?')return;
+  (async()=>{
+    const {watch}=await chrome.storage.session.get('watch');
+    const mine=watch&&sender.tab?.id===watch.tabId;
+    if(message.type==='blok-watching?')return respond({watching:!!mine});
+    if(!mine)return respond({});
+    const last=watch.steps[watch.steps.length-1], step=message.step;
+    // A field reports its value on change and again on Enter; keep one.
+    if(!(last&&last.op==='fill'&&step.op==='fill'&&last.name===step.name&&last.value===step.value))watch.steps.push(step);
+    if(watch.steps.length<=200)await chrome.storage.session.set({watch});
+    respond({});
+  })();
+  return true;
+});
 function connect() {
   if(port)return;
   const connection=chrome.runtime.connectNative('io.blok.browser');port=connection;

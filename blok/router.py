@@ -97,7 +97,9 @@ def label(task: dict) -> str:
         'window': {'close': 'Close the active window', 'fullscreen': 'Toggle fullscreen', 'float': 'Toggle floating',
                    'move': f'Move window to workspace {task.get("workspace")}',
                    'focus': f'Switch to {task.get("app")}'}.get(task.get('op'), 'Window'),
-        'plugin': _plugin_label(task), 'arrange': f'{task.get("left")} left, {task.get("right")} right',
+        'plugin': _plugin_label(task), 'watch': 'Watch and learn' if task.get('on') else 'Stop watching',
+        'skill_save': f'Save skill {task.get("name")}', 'skill_run': f'Run skill {task.get("name")}',
+        'skill_list': 'List skills', 'skill_forget': f'Forget skill {task.get("name")}', 'arrange': f'{task.get("left")} left, {task.get("right")} right',
         'layout_save': f'Save layout {task.get("name")}', 'layout_restore': f'Restore layout {task.get("name")}',
         'layout_list': 'List saved layouts', 'focus': 'Focus mode ' + ('on' if task.get('on') else 'off'),
         'where': f'Find the {task.get("app")} window', 'workspace_info': f'What is on workspace {task.get("workspace")}',
@@ -148,6 +150,11 @@ def extract(intent: str, text: str) -> Action | str:
         if intent == 'arrange':
             return 'Say it like "code on the left, browser on the right".'
         return 'What should I call this layout? Say "save this layout as coding".'
+    if intent.startswith('skill:'):
+        from blok import skills
+        name = intent.split(':', 1)[1]
+        found = skills.match(t)
+        return tool('skill_run', name=name, values=found[1] if found and found[0]['name'] == name else {})
     if intent.startswith('plugin:'):
         from blok import plugins
         item = plugins.commands().get(intent.split(':', 1)[1])
@@ -361,9 +368,11 @@ PLUGIN_AREA = 'Your own commands'
 
 def all_areas() -> dict:
     """Built-in areas plus drop-in commands (≤9 per question keeps Laya calibrated)."""
-    from blok import plugins
-    found = list(plugins.commands().values())[:9]
-    return {**AREAS, PLUGIN_AREA: {c.description: 'plugin:' + c.name for c in found}} if found else AREAS
+    from blok import plugins, skills
+    own = {c.description: 'plugin:' + c.name for c in plugins.commands().values()}
+    own.update({'Run my skill: ' + k['name']: 'skill:' + k['name'] for k in skills.all_skills().values()})
+    own = dict(list(own.items())[:9])
+    return {**AREAS, PLUGIN_AREA: own} if own else AREAS
 
 
 def route(text: str, distribution) -> Route:

@@ -42,12 +42,12 @@ def client(conn):
     try:
         conn.settimeout(50)
         request=json.loads(conn.makefile('rb').readline(16384))
-        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill','new_tab','sequence','github_repo','next_track','links','download','click_download','active','pointer','click_observed','site_search','hints','hint','scroll','focused_field','open_tab','read_page'}:raise ValueError('Unsupported action')
+        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill','new_tab','sequence','github_repo','next_track','links','download','click_download','active','pointer','click_observed','site_search','hints','hint','scroll','focused_field','open_tab','read_page','watch_start','watch_stop','replay'}:raise ValueError('Unsupported action')
         request['id']=key;pending[key]=queue.Queue()
         payload=json.dumps(request).encode()
         with write_lock:
             sys.stdout.buffer.write(struct.pack('=I',len(payload))+payload);sys.stdout.buffer.flush()
-        deadline=time.monotonic()+45
+        deadline=time.monotonic()+(180 if request['action']=='replay' else 45)
         while True:
             response=pending[key].get(timeout=max(.001,deadline-time.monotonic()))
             conn.sendall(json.dumps(response).encode()+b'\n')

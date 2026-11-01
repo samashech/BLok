@@ -134,4 +134,31 @@ try{
  assert.equal(await page.locator('button').nth(1).getAttribute('data-c'),'blue');
  assert.equal(await page.locator('button').nth(0).getAttribute('data-c'),null);
  console.log('PASS: page text without menus, selected text, and "click the blue Download button"');
+ const form=`<form onsubmit="event.preventDefault();document.body.dataset.sent=document.querySelector('#amt').value+'/'+document.querySelector('#note').value">
+   <label>Amount <input id=amt></label><label>Note <input id=note></label><label>PIN <input type=password id=pin></label>
+   <button type=button onclick="document.body.dataset.category='travel'">Travel</button><button>Submit</button></form>`;
+ await page.route('https://expenses.example.org/**',r=>r.fulfill({contentType:'text/html',body:form}));
+ await page.goto('https://expenses.example.org/new');
+ await page.evaluate(()=>{window.__sent=[];window.chrome={runtime:{sendMessage:m=>{window.__sent.push(m);return Promise.resolve({watching:true});},onMessage:{addListener(){}}}};});
+ await page.evaluate(await readFile(new URL('../browser-extension/recorder.js',import.meta.url),'utf8'));
+ await page.waitForTimeout(50);
+ await page.fill('#amt','450'); await page.locator('#amt').dispatchEvent('change');
+ await page.click('text=Travel');
+ await page.fill('#pin','1234'); await page.locator('#pin').dispatchEvent('change');
+ await page.fill('#note','lunch'); await page.press('#note','Enter');
+ const recorded=(await page.evaluate(()=>window.__sent)).filter(m=>m.type==='blok-step').map(m=>m.step);
+ assert.deepEqual(recorded.map(s=>[s.op,s.name,s.value]),[['fill','Amount','450'],['click','Travel',undefined],['secret','PIN',undefined],
+   ['fill','Note','lunch'],['enter','Note',undefined]]);
+ assert.ok(!JSON.stringify(recorded).includes('1234'));
+ await page.goto('https://expenses.example.org/new');
+ for(const step of [{op:'fill',name:'Amount',role:'textbox',value:'999'},{op:'click',name:'Travel',role:'button'},{op:'enter',name:'Note',role:'textbox'}]){
+   const found=await page.evaluate(pageAction,{op:'find_control',name:step.name,role:step.role});
+   assert.ok(found,step.name);
+   const op=step.op==='fill'?'fill':step.op==='enter'?'submit':'click';
+   await page.evaluate(pageAction,{op,control:found.control,page:found.page,text:step.value});
+ }
+ assert.equal(await page.evaluate(()=>document.body.dataset.category),'travel');
+ assert.equal(await page.evaluate(()=>document.body.dataset.sent),'999/');
+ assert.equal(await page.evaluate(pageAction,{op:'find_control',name:'Delete',role:'button'}),false);
+ console.log('PASS: watch me records names and values (never passwords), and replay finds the same controls again');
 }finally{await browser.close();}

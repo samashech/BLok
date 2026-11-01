@@ -33,7 +33,7 @@ HINDI_NUMBERS = {'ek': 1, 'do': 2, 'teen': 3, 'char': 4, 'chaar': 4, 'paanch': 5
                  'gyarah': 11, 'gyaarah': 11, 'barah': 12, 'baarah': 12, 'terah': 13, 'chaudah': 14, 'pandrah': 15,
                  'solah': 16, 'satrah': 17, 'atharah': 18, 'unnis': 19, 'bees': 20, 'bis': 20}
 MARKER = re.compile(r'\b(?:' + '|'.join(V.values()) + r'|kitne|kitni|kya|kaun|aaj|awaaz|awaz|aawaz|gaane|gane|gaana|gana|'
-                    r'agla|pichla|neeche|niche|upar|wala|waala|ke\s+baare|ko|hai|hain|karo|kar\s+do|liye|naam|rakho|mein|lagao)\b', re.I)
+                    r'agla|pichla|neeche|niche|upar|wala|waala|ke\s+baare|ko|hai|hain|karo|kar\s+do|liye|naam|rakho|mein|lagao|dekho|seekho|gaya|khatam|dikhata|dikhati|sikhata)\b', re.I)
 
 
 def _num(word: str) -> str:
@@ -69,6 +69,10 @@ RULES: list[tuple[str, str]] = [
     (r'(?:likho|likh\s+do|type\s+karo)\s+(?P<text>.+)', 'type {text}'),
     (r'(?P<text>.+?)\s+' + V['type'], 'type {text}'),
     (r'(?:enter|tab|escape)\s+(?:dabao|daba\s+do|press\s+karo)', 'press {0}'),
+    # Teaching
+    (r'(?:dekho|dekh\s+lo|seekho)(?:\s+(?:main|mai|me)\s+kaise\s+kar(?:ta|ti)\s+(?:hun|hoon|hu))?|(?:main|mai)\s+(?:dikhata|dikhati|sikhata|sikhati)\s+(?:hun|hoon|hu)', 'watch me'),
+    (r'(?:iska|isko|ise|is\s*ka)\s+naam\s+(?P<name>.+?)\s+(?:rakho|rakh\s+do|do)|(?:ise|isko)\s+(?P<name2>.+?)\s+naam\s+se\s+(?:save\s+karo|yaad\s+rakho)', 'call it {name}'),
+    (r'ho\s+gaya|bas(?:\s+itna\s+hi)?|khatam', 'done'),
     # Reading the screen
     (r'(?:ye|yeh|is)?\s*(?:page|article|screen)?\s*(?:ko\s+)?(?:padh\s*(?:ke|kar)\s+sunao|padho|padh\s+do|sunao)', 'read this to me'),
     (r'(?:ye|yeh)\s+(?:page|article|video|screen)\s+(?:kis\s+(?:baare|bare)\s+(?:mein|me)\s+hai|kya\s+hai)|(?:iska\s+)?(?:summary|saransh)\s+(?:do|batao|bata\s+do)', 'what is this page about'),
@@ -199,6 +203,8 @@ def _clause(text: str) -> str | None:
             return 'press ' + t.split()[0].lower()
         if 'n2' in groups:
             groups['n'] = groups.pop('n2')
+        if 'name2' in groups:
+            groups['name'] = groups.pop('name2')
         if 'n' in groups:
             groups['n'] = _num(groups['n'])
         site = _site(groups.pop('site', None))
@@ -340,6 +346,10 @@ REPLIES = [
     (r'Hands-free is on\..*', lambda m: 'हैंड्स फ़्री चालू है। ब्लॉक बोलकर कुछ भी कहिए'),
     (r'Hands-free is off\.', lambda m: 'हैंड्स फ़्री बंद कर दिया'),
     (r'Yes\?', lambda m: 'जी?'),
+    (r'Watching\..*', lambda m: 'देख रहा हूँ। एक बार करके दिखाइए, फिर बोलिए इसका नाम क्या रखूँ'),
+    (r'Got it, (?P<n>\d+) steps\..*', lambda m: f'{m["n"]} स्टेप देख लिए। इसका नाम क्या रखूँ?'),
+    (r'Learned "(?P<x>[^"]+)".*', lambda m: f'सीख लिया: {_name(m["x"])}'),
+    (r'Done: (?P<x>.+)', lambda m: f'{_name(m["x"])} हो गया'),
     (r'Focus mode on: .*', lambda m: 'फ़ोकस मोड चालू है, नोटिफ़िकेशन बंद कर दिए'),
     (r'Focus (?:mode off|time is over) after (?P<n>\d+) minutes\..*', lambda m: f'फ़ोकस मोड बंद, {m["n"]} मिनट हुए'),
     (r'Saved (?P<n>\d+) windows? as (?P<x>.+)', lambda m: f'{m["n"]} विंडो {_name(m["x"])} नाम से सेव कर दीं'),

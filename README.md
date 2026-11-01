@@ -112,7 +112,17 @@ Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for it
 | “scroll down” · “scroll up a little” · “go to the top” | scrolls the page, or the app in front |
 | “hide numbers” · “hands free off” | clears the numbers · stops listening |
 
-It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers and page reading need the browser extension updated to `phase10`: reload it in `brave://extensions`, then reload open pages.
+It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers, page reading and teaching need the browser extension updated to `phase11`: reload it in `brave://extensions`, then reload open pages.
+
+## Teach it by showing
+
+No scripts: show BLoK a browser task once and it can do it again by name.
+
+1. Open the page where the task starts and say **“watch me”**.
+2. Do it: click, type, press Enter. BLoK records each control by its label and role, not screen positions, and never reads password fields.
+3. Say **“done, call it file an expense”**.
+
+Later, **“file an expense, amount 900, note team dinner”** replays it: it opens the starting page, finds each control again, types your new values (fields you don't mention keep what you typed while teaching) and stops at the first step that doesn't match. Skills that click things like *Pay*, *Buy*, *Submit* or *Delete* ask for approval first. “list my skills” and “forget file an expense” manage them; they're plain JSON in `~/.config/blok/skills/`. In Hinglish: “dekho main kaise karta hun” … “iska naam kharcha rakho”.
 
 ## Let AI apps use your desktop (MCP)
 

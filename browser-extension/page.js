@@ -90,6 +90,22 @@ export async function pageAction(request, captureErrors=false) {
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
   }
+  if(request.op==='find_control') {
+    // Replay: the visible control with this recorded label (and role, when it still matches).
+    const wanted=norm(request.name);
+    const same=nodes.filter(e=>norm(name(e)).slice(0,120)===wanted.slice(0,120));
+    const pick=same.find(e=>roleOf(e)===request.role)||same[0]||nodes.find(e=>wanted.length>3&&norm(name(e)).startsWith(wanted));
+    if(!pick) return false;                   // polled until it appears or the step times out
+    return {control:descriptor(pick),page:page()};
+  }
+  if(request.op==='submit') {
+    const e=observed(request);
+    e.focus();
+    const form=e.closest('form');
+    if(form) form.requestSubmit();
+    else for(const type of ['keydown','keypress','keyup']) e.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+    return message('Pressed Enter');
+  }
   if(request.op==='read_page') {
     // The page's main readable text: the biggest article-like block, without menus and footers.
     const selection=String(getSelection()||'').trim();
