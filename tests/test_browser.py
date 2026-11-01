@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch, Mock
-from hyprash.commands import parse
-from hyprash.backend import Backend
-from hyprash import browser
+from blok.commands import parse
+from blok.backend import Backend
+from blok import browser
 
 class BrowserTests(unittest.TestCase):
     def test_browser_sequence(self):

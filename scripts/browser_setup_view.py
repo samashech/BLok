@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys,time,subprocess,json
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash.browser import focus,run,control
+from blok.browser import focus,run,control
 def setup_focus():
     candidates=[c for c in json.loads(run(['hyprctl','-j','clients'])) if c.get('class')=='brave-origin' and c.get('title','').startswith('Extensions')]
     if candidates:
@@ -34,4 +34,4 @@ if '--load' in sys.argv:
     time.sleep(.5)
     run(['wtype','-k','Return'])
 time.sleep(.5)
-subprocess.run(['grim','/tmp/hyprash-extensions.png'],check=True)
+subprocess.run(['grim','/tmp/blok-extensions.png'],check=True)

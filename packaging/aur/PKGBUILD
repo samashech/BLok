@@ -1,0 +1,43 @@
+# Maintainer: Sameer Vishwakarma
+pkgname=blok-git
+pkgver=r0
+pkgrel=1
+pkgdesc="An offline Jarvis for Hyprland: hears you, sees your screen, clicks and talks back. No cloud, no API keys."
+arch=('any')
+url="https://github.com/samashech/BLoK"
+license=('Apache-2.0')
+depends=('hyprland' 'quickshell' 'qt6-multimedia' 'pipewire' 'wtype' 'fd' 'wl-clipboard' 'uv' 'python')
+optdepends=('espeak-ng: fallback voice'
+            'poppler: read PDFs aloud'
+            'hyprpicker: "pick a color" command'
+            'ollama: optional Qwen rephraser for rambling speech'
+            'brave-bin: browser control through the BLoK extension')
+makedepends=('git')
+provides=('blok')
+conflicts=('blok')
+install=blok.install
+source=("blok::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd blok
+  printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+package() {
+  cd blok
+  install -d "$pkgdir/opt/blok"
+  cp -r blok ui themes commands browser-extension scripts vendor blok.sh install.sh requirements.txt README.md "$pkgdir/opt/blok/"
+  find "$pkgdir/opt/blok" -name __pycache__ -prune -exec rm -rf {} +
+  # Models, the Python environment and your data live in ~/.local/share/blok.
+  install -Dm755 /dev/stdin "$pkgdir/usr/bin/blok" <<'WRAPPER'
+#!/bin/sh
+export BLOK_HOME="${BLOK_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/blok}"
+if [ "${1:-}" != setup ] && [ ! -x "$BLOK_HOME/.venv/bin/python" ]; then
+  echo "BLoK isn't set up yet. Run: blok setup" >&2
+  exit 1
+fi
+exec /opt/blok/blok.sh "$@"
+WRAPPER
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

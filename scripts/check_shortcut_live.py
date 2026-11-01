@@ -6,21 +6,21 @@ if len(sys.argv)>1:
     import gi
     gi.require_version('Gtk','4.0')
     from gi.repository import Gtk
-    app=Gtk.Application(application_id='io.hyprash.ShortcutCheck')
+    app=Gtk.Application(application_id='io.blok.ShortcutCheck')
     def activate(app):
-        win=Gtk.ApplicationWindow(application=app,title='Hyprash shortcut check')
+        win=Gtk.ApplicationWindow(application=app,title='BLoK shortcut check')
         entry=Gtk.Entry();entry.connect('changed',lambda e:Path(sys.argv[1]).write_text(e.get_text()))
         win.set_child(entry);win.set_default_size(320,100);win.present();entry.grab_focus()
     app.connect('activate',activate);app.run([sys.argv[0]])
 else:
-    subprocess.run([str(ROOT/'hyprash.sh'),'show'],check=True,stdout=subprocess.DEVNULL)
-    with tempfile.TemporaryDirectory(prefix='hyprash-shortcut-') as directory:
+    subprocess.run([str(ROOT/'blok.sh'),'show'],check=True,stdout=subprocess.DEVNULL)
+    with tempfile.TemporaryDirectory(prefix='blok-shortcut-') as directory:
         output=Path(directory)/'text';output.write_text('')
         app=subprocess.Popen(['/usr/bin/python',__file__,str(output)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try:
             for _ in range(50):
                 clients=json.loads(subprocess.check_output(['hyprctl','-j','clients']))
-                target=next((c for c in clients if c['title']=='Hyprash shortcut check'),None)
+                target=next((c for c in clients if c['title']=='BLoK shortcut check'),None)
                 if target:break
                 time.sleep(.1)
             assert target,'Test entry did not open'
@@ -38,13 +38,13 @@ else:
                 time.sleep(.05)
             assert keys.returncode==0
             assert recorded,'Ctrl+. did not start recording'
-            subprocess.run([str(ROOT/'hyprash.sh'),'hide'],check=True,stdout=subprocess.DEVNULL)
+            subprocess.run([str(ROOT/'blok.sh'),'hide'],check=True,stdout=subprocess.DEVNULL)
             time.sleep(.4)
             status=json.loads(subprocess.check_output(['voxtype','status','--format','json']))
             assert status['class']=='idle',status
-            assert not Path(os.environ['XDG_RUNTIME_DIR'],'hyprash-key-held').exists()
+            assert not Path(os.environ['XDG_RUNTIME_DIR'],'blok-key-held').exists()
             assert output.read_text().count('.')==before,repr(output.read_text())
             print('PASS: Ctrl+. does not insert a dot; releasing Ctrl first still finishes; microphone idle',flush=True)
         finally:
-            subprocess.run([str(ROOT/'hyprash.sh'),'hide'],stdout=subprocess.DEVNULL)
+            subprocess.run([str(ROOT/'blok.sh'),'hide'],stdout=subprocess.DEVNULL)
             app.terminate();app.wait(timeout=5)

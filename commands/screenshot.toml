@@ -1,0 +1,4 @@
+description = "Take a screenshot"
+phrases = ["take a screenshot", "screenshot", "take a screen shot", "grab [the] screen", "capture [the] screen"]
+run = "omarchy-capture-screenshot"
+reply = "Screenshot taken"

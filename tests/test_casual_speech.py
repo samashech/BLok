@@ -1,9 +1,9 @@
 import json
 import unittest
 
-from hyprash.nlu import resolve_intent, tidy_speech
-from hyprash.plans import proposals
-from hyprash.themes import ThemeStore, THEMES
+from blok.nlu import resolve_intent, tidy_speech
+from blok.plans import proposals
+from blok.themes import ThemeStore, THEMES
 
 
 class TidySpeechTests(unittest.TestCase):
@@ -68,14 +68,22 @@ class EverydayIntentTests(unittest.TestCase):
 class SeasonalThemeTests(unittest.TestCase):
     def test_themes_cycle_and_voice(self):
         import tempfile
-        self.assertEqual(THEMES[:4], ('omarchy', 'liquid', 'halloween', 'diwali'))
+        self.assertEqual(THEMES[:5], ('omarchy', 'liquid', 'halloween', 'diwali', 'minecraft'))
         store = ThemeStore(tempfile.mkdtemp())
-        for expected in ('liquid', 'halloween', 'diwali', 'omarchy'):
+        for expected in ('liquid', 'halloween', 'diwali', 'minecraft', 'omarchy'):
             store.select('next')
             self.assertEqual(store.selected, expected)
         self.assertEqual(json.loads(resolve_intent("make it spooky").action_value), {'tool': 'theme', 'name': 'halloween'})
         self.assertEqual(json.loads(resolve_intent("switch to the diwali theme").action_value), {'tool': 'theme', 'name': 'diwali'})
+        self.assertEqual(json.loads(resolve_intent("make it blocky").action_value), {'tool': 'theme', 'name': 'minecraft'})
 
+    def test_seasonal_themes_define_their_ornaments(self):
+        from blok.themes import ROOT
+        for name, ring in (('diwali', 'sparks'), ('halloween', 'arc'), ('minecraft', 'pixels')):
+            theme = json.loads((ROOT / 'themes' / name / 'theme.json').read_text())
+            self.assertEqual(theme['ring'], ring)
+            self.assertTrue(theme['micIcon'] and theme['badge'])
+        self.assertGreater(json.loads((ROOT / 'themes' / 'halloween' / 'theme.json').read_text())['chamfer'], 0)
 
 if __name__ == '__main__':
     unittest.main()

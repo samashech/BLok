@@ -1,8 +1,0 @@
-{
-  "id": "halloween", "name": "Halloween", "followDesktop": false,
-  "radius": 14, "controlRadius": 8, "font": "Noto Serif", "mode": "dark",
-  "background": "#0d0711", "backgroundTop": "#1a0d22", "backgroundBottom": "#07040a",
-  "foreground": "#f4e9d8", "muted": "#a993b3", "accent": "#ff7518",
-  "border": "#5b2a6e", "surface": "#24132d", "hover": "#34203f",
-  "success": "#9be564", "error": "#ff4f5e", "orb": "#ff9a3c"
-}

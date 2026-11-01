@@ -1,0 +1,498 @@
+"""Bounded plans: dependency-aware multi-step validation and execution.
+
+Phase 6 DAG / Dependency-Aware Sequential Execution with isolated contexts,
+typed PlanStep schemas, idempotency guards, and partial failure recovery.
+"""
+from dataclasses import dataclass, field
+import json
+import re
+from typing import Any
+from urllib.parse import quote_plus
+
+from blok.commands import Action, START, parse, SITES
+from blok.workflows import workflow
+from blok.nlu import split_compound_utterance, resolve_intent, ConversationContext
+
+# File, window and download verbs are handled by bounded tools (blok/router.py)
+# with approval cards. System-level and outbound actions stay unsupported.
+UNSUPPORTED_VERB = re.compile(
+    r'\b(?:send|upload|uninstall|shut ?down|restart|reboot|format|destroy|wipe)\b', re.I)
+
+
+SENSITIVE_WORDS = re.compile(
+    r'\b(?:delete|remove|send|submit|purchase|buy|checkout|close all|clear|overwrite|log out|logout|pay)\b',
+    re.I
+)
+
+
+def assess_step_risk(kind_or_action: Any, value: str | None = None, confidence: float = 1.0) -> tuple[str, bool, str]:
+    """Classify step into SAFE_READ, SAFE_NAVIGATE, STATE_MUTATING, or SENSITIVE_DESTRUCTIVE."""
+    if isinstance(kind_or_action, Action):
+        kind = kind_or_action.kind
+        value = kind_or_action.value
+    else:
+        kind = str(kind_or_action)
+        value = str(value or "")
+
+    # 1. Borderline model confidence
+    if 0.55 <= confidence < 0.72:
+        return "SENSITIVE_DESTRUCTIVE", True, f"Borderline model confidence ({round(confidence*100)}%)"
+
+    # 2. Check value for sensitive actions
+    if kind == "ui_control":
+        try:
+            task = json.loads(value)
+            target = str(task.get("target", ""))
+            action = str(task.get("action", ""))
+            if SENSITIVE_WORDS.search(target) or SENSITIVE_WORDS.search(action):
+                return "SENSITIVE_DESTRUCTIVE", True, f"Sensitive control action: {target or action}"
+        except Exception:
+            pass
+    elif kind == "web_task":
+        try:
+            task = json.loads(value)
+            action = task.get("action", "")
+            target = str(task.get("target", ""))
+            if SENSITIVE_WORDS.search(target) or SENSITIVE_WORDS.search(action):
+                return "SENSITIVE_DESTRUCTIVE", True, f"Sensitive browser action: {target or action}"
+            if action in ("new_tab", "navigate", "search"):
+                return "SAFE_NAVIGATE", False, ""
+            if action in ("play", "next_track"):
+                return "STATE_MUTATING", False, ""
+        except Exception:
+            pass
+    elif kind in ("write", "new_note"):
+        if SENSITIVE_WORDS.search(value):
+            return "SENSITIVE_DESTRUCTIVE", True, f"Modifying/overwriting note: {value[:30]}"
+        return "STATE_MUTATING", False, ""
+    elif kind in ("obsidian_note", "photo", "browser_type", "browser_key", "routine"):
+        return "STATE_MUTATING", False, ""
+    elif kind in ("open", "url", "address"):
+        return "SAFE_NAVIGATE", False, ""
+    elif kind == "tool":
+        # Destructive file actions and downloads ask for approval after their
+        # target is resolved, so the card can name the exact file or link.
+        try:
+            name = json.loads(value).get("tool", "")
+        except ValueError:
+            name = ""
+        if name in ("file_find", "file_read", "file_pick", "answer"):
+            return "SAFE_READ", False, ""
+        if name in ("file_open", "volume", "brightness", "media"):
+            return "SAFE_NAVIGATE", False, ""
+        return "STATE_MUTATING", False, ""
+
+    return "SAFE_READ", False, ""
+
+
+@dataclass(frozen=True, eq=False)
+class PlanStep(Action):
+    step_id: str = "step_1"
+    subtask_id: str = "subtask_1"
+    domain_scope: str = "general"
+    target_domain: str = "general"
+    depends_on: tuple[str, ...] = field(default_factory=tuple)
+    idempotency: str = "IDEMPOTENT"  # "IDEMPOTENT" | "NON_IDEMPOTENT"
+    preconditions: tuple[str, ...] = field(default_factory=tuple)
+    postconditions: tuple[str, ...] = field(default_factory=tuple)
+    on_failure: str = "ABORT_DEPENDENT"  # "ABORT_DEPENDENT" | "ABORT_ALL"
+    target_tab_id: int | None = None
+    output_binding: str | None = None
+    input_bindings: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    risk_level: str = "SAFE_NAVIGATE"
+    requires_approval: bool = False
+    approval_reason: str = ""
+
+    @property
+    def action_type(self) -> str:
+        return self.kind
+
+    @property
+    def action_value(self) -> str:
+        return self.value
+
+    @property
+    def input_bindings_dict(self) -> dict[str, str]:
+        return dict(self.input_bindings)
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, Action):
+            return self.kind == other.kind and self.value == other.value
+        return False
+
+    def __hash__(self) -> int:
+        return hash((self.kind, self.value, self.offset))
+
+    @classmethod
+    def from_action(cls, action: Any, step_id: str = "step_1", subtask_id: str = "subtask_1") -> "PlanStep":
+        kind = getattr(action, "kind", getattr(action, "action_type", ""))
+        value = getattr(action, "value", getattr(action, "action_value", ""))
+        offset = getattr(action, "offset", 0)
+        domain, idemp, pre, post = _infer_step_attributes(kind, value)
+        risk, req_appr, reason = assess_step_risk(kind, value)
+        return cls(
+            kind=kind,
+            value=value,
+            offset=offset,
+            step_id=step_id,
+            subtask_id=subtask_id,
+            domain_scope=domain,
+            target_domain=domain,
+            idempotency=idemp,
+            preconditions=tuple(pre),
+            postconditions=tuple(post),
+            on_failure="ABORT_ALL",
+            risk_level=risk,
+            requires_approval=req_appr,
+            approval_reason=reason,
+        )
+
+
+@dataclass
+class PlanExecutionReport:
+    completed_steps: list[str] = field(default_factory=list)
+    failed_steps: list[dict[str, Any]] = field(default_factory=list)  # {step_id, stage, error}
+    skipped_steps: list[str] = field(default_factory=list)
+    uncertain_steps: list[str] = field(default_factory=list)
+    step_results: dict[str, Any] = field(default_factory=dict)
+    overall_status: str = "completed"  # "completed" | "failed" | "cancelled" | "partial_success"
+
+
+@dataclass(frozen=True)
+class Plan:
+    steps: tuple[PlanStep, ...]
+
+    def __init__(self, steps: tuple[Any, ...]):
+        normalized: list[PlanStep] = []
+        for idx, s in enumerate(steps, 1):
+            if isinstance(s, PlanStep):
+                normalized.append(s)
+            elif hasattr(s, "kind") and hasattr(s, "value"):
+                normalized.append(PlanStep.from_action(s, step_id=f"step_{idx}"))
+            else:
+                raise TypeError(f"Expected PlanStep or Action, got {type(s)}")
+        object.__setattr__(self, "steps", tuple(normalized))
+
+
+def _infer_step_attributes(kind: str, value: str) -> tuple[str, str, list[str], list[str]]:
+    """Infer domain, idempotency, preconditions, and postconditions from action kind and value."""
+    domain = "general"
+    idempotency = "IDEMPOTENT"
+    preconditions: list[str] = []
+    postconditions: list[str] = []
+
+    if kind == "web_task":
+        try:
+            task = json.loads(value)
+            action = task.get("action")
+            site = task.get("site", "browser")
+            if site in ("youtube", "spotify", "google", "github"):
+                domain = f"browser:{site}"
+            else:
+                domain = "browser:general"
+
+            if action == "new_tab":
+                domain = "browser:general"
+                idempotency = "NON_IDEMPOTENT"
+                postconditions = ["tab_active"]
+            elif action == "search":
+                idempotency = "IDEMPOTENT"
+                postconditions = ["results_loaded"]
+            elif action == "play":
+                idempotency = "NON_IDEMPOTENT"
+                postconditions = ["media_playing"]
+            elif action == "result":
+                idempotency = "IDEMPOTENT"
+                postconditions = ["media_playing" if task.get("play") else "destination_matched"]
+            elif action == "sequence":
+                sub_steps = task.get("steps", [])
+                if sub_steps:
+                    first_site = sub_steps[0].get("site", "browser")
+                    domain = f"browser:{first_site}"
+                idempotency = "NON_IDEMPOTENT"
+            elif action in ("click", "fill"):
+                domain = "browser:page"
+                idempotency = "NON_IDEMPOTENT" if action == "click" else "IDEMPOTENT"
+        except Exception:
+            domain = "browser:general"
+    elif kind == "open":
+        if value == "browser":
+            domain = "browser:general"
+        elif value in ("notes", "obsidian", "blok_notes"):
+            domain = "desktop:notes"
+        elif value in ("camera", "snapshot", "blok_camera"):
+            domain = "desktop:camera"
+        else:
+            domain = f"desktop:{value}"
+        idempotency = "IDEMPOTENT"
+    elif kind == "obsidian_note":
+        domain = "desktop:obsidian"
+        idempotency = "NON_IDEMPOTENT"
+        postconditions = ["note_saved"]
+    elif kind in ("new_note", "title", "write"):
+        domain = "desktop:notes"
+        idempotency = "NON_IDEMPOTENT" if kind == "new_note" else "IDEMPOTENT"
+    elif kind == "photo":
+        domain = "desktop:camera"
+        idempotency = "NON_IDEMPOTENT"
+    elif kind == "workspace":
+        domain = "desktop:workspace"
+        idempotency = "IDEMPOTENT"
+    elif kind == "routine":
+        domain = f"routine:{value}"
+        idempotency = "NON_IDEMPOTENT"
+    elif kind == "url":
+        if "youtube.com" in value:
+            domain = "browser:youtube"
+        elif "spotify.com" in value:
+            domain = "browser:spotify"
+        elif "google.com" in value:
+            domain = "browser:google"
+        else:
+            domain = "browser:general"
+        idempotency = "IDEMPOTENT"
+        postconditions = ["destination_matched"]
+    elif kind == "tool":
+        try:
+            name = json.loads(value).get("tool", "")
+        except ValueError:
+            name = ""
+        domain = ("desktop:files" if name.startswith("file_") else "browser:download" if name == "download"
+                  else "desktop:" + name)
+        idempotency = "IDEMPOTENT" if name in ("file_find", "file_read", "file_open", "answer") else "NON_IDEMPOTENT"
+    elif kind in ("address", "browser_type", "browser_key"):
+        domain = "browser:chrome"
+        idempotency = "NON_IDEMPOTENT" if kind == "browser_key" and value == "new tab" else "IDEMPOTENT"
+
+    return domain, idempotency, preconditions, postconditions
+
+
+def proposals(text: str, context: ConversationContext | None = None) -> list[tuple[str, PlanStep]]:
+    """Produce validated DAG plan proposals from an utterance."""
+    literals = {}
+
+    def protect(match):
+        key = f"blokliteral{len(literals)}token"
+        literals[key] = match[1] if match[1] is not None else match[2]
+        return key
+
+    # Apostrophes inside words (God's Plan) are not quotation delimiters.
+    masked = re.sub(r'"([^"\n]*)"|(?<!\w)\x27([^\x27\n]*)\x27(?!\w)', protect, text)
+    if '"' in masked:
+        raise ValueError('Close the quoted text before running the command.')
+
+    # Protect known entity conjunctions like "rock and roll"
+    known_phrases = [
+        r'\brock and roll\b',
+        r'\bdungeons and dragons\b',
+        r'\bbread and butter\b',
+        r'\bme and my shadow\b',
+        r'\bpeace and love\b',
+    ]
+    for kp in known_phrases:
+        def protect_phrase(m):
+            key = f"blokliteral{len(literals)}token"
+            literals[key] = m.group(0)
+            return key
+        masked = re.sub(kp, protect_phrase, masked, flags=re.I)
+
+    boundary = (
+        r'\s+(?:and\s+then|then|after\s+that|once that\'s done|next)\s+|\s*;\s*|'
+        r'\s+and\s+(?=(?:open|create|make|write|add|take|search|look|play|put|blast|'
+        r'go|visit|launch|fire|spin|bring|hop|click|select|focus|type|enter|press|'
+        r'hit|reload|switch|find|delete|send|upload|install|remove|close|stop|'
+        r'rename|download|run|start|execute|gimme|give|turn|mute|unmute|pause|resume|lock|read|copy|move|'
+        r'show|check|pull|watch|listen|set|tell|do|skip|trash|dim|lower|raise|maximize|switch|put|bump)\b)'
+    )
+    chunks = re.split(boundary, masked, flags=re.I)
+    if any(not chunk.strip() for chunk in chunks) or len(chunks) > 8:
+        raise ValueError('Use between one and eight complete steps.')
+
+    def restore(value: str) -> str:
+        for key, literal in literals.items():
+            value = value.replace(key, literal)
+        return value
+
+    active_context = ConversationContext(
+        active_tab_id=context.active_tab_id if context else None,
+        last_active_tab_id=context.last_active_tab_id if context else None,
+        active_site=context.active_site if context else None,
+        active_url=context.active_url if context else None,
+        last_intent=context.last_intent if context else None,
+        search_context=dict(context.search_context) if context and context.search_context else None,
+        active_app=context.active_app if context else None,
+        media_state=context.media_state if context else None,
+    )
+
+    result: list[tuple[str, PlanStep]] = []
+    i = 0
+    step_counter = 1
+    subtask_counter = 1
+
+    while i < len(chunks):
+        clause = chunks[i].strip()
+        action = None
+        consumed = 1
+
+        # Retain existing browser workflows as one tab-owned transaction
+        for count in range(min(4, len(chunks) - i), 1, -1):
+            joined = ' and '.join(chunks[i:i + count])
+            found = workflow(joined.lower())
+            if not found or found[0] != 'web_task':
+                continue
+            task = json.loads(found[1])
+            if task['action'] in ('sequence', 'github_repo') or (
+                count == 2 and task['action'] in ('search', 'play')
+                and re.fullmatch(r'(?:open|go to|visit) (?:www\.)?(?:google|youtube|spotify)(?:\.com)?', clause, re.I)
+            ):
+                # A query may contain "and", but cannot hide another command
+                if any(re.search(boundary, step.get('query', ''), re.I)
+                       for step in task.get('steps', [task])):
+                    continue
+                action, clause, consumed = Action(*found), joined, count
+                break
+
+        if action is None:
+            candidate = re.sub(r'^(?:please |can you |could you |would you |i want you to |let\'s |yo bro |yo |bro )', '', clause, flags=re.I)
+            candidate = re.sub(r'\s+(?:for me real quick|real quick|for me|for us|right now|please)$', '', candidate, flags=re.I)
+
+            # Check unsupported OS / system verbs first
+            if UNSUPPORTED_VERB.search(candidate):
+                raise ValueError('Unsupported step. Nothing was run.')
+            if re.search(r'\b(?:run|start|execute)\b.*\broutine\b', candidate, re.I):
+                from blok.routines import get_routine
+                m_r = re.search(r'\b(?:run|start|execute)(?: the)? (?:routine )?([a-z0-9_ -]+?)(?: routine)?$', candidate, re.I)
+                r_name = m_r[1].strip() if m_r else ""
+                if not get_routine(r_name):
+                    raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
+
+            # Check NLU Tier 1 intent resolution with active_context
+            resolved = resolve_intent(candidate, active_context)
+            if resolved.intent_type == "unsupported":
+                raise ValueError('Unsupported step. Nothing was run.')
+            if resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify") and resolved.confidence >= 0.85:
+                action = Action(resolved.action_kind, resolved.action_value)
+            else:
+                # 2. Try parse()
+                parsed = parse(candidate, final=True, context=active_context)
+                start = START.search(candidate)
+                if len(parsed) == 1 and not (start and start.start() != 0 and not workflow(candidate)):
+                    action = parsed[0]
+                elif resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify"):
+                    action = Action(resolved.action_kind, resolved.action_value)
+                else:
+                    # No rule understood this clause: local Laya routes it
+                    # (blok/router.py) before anything runs.
+                    result.append((restore(clause), None))
+                    i += 1
+                    step_counter += 1
+                    continue
+
+            fixed = {
+                'photo': r'take(?: a)? (?:picture|photo|selfie)(?: of me)?',
+                'browser_key': r'(?:press enter|hit enter|new tab|go back|go forward|reload(?: the page)?)',
+                'address': r'(?:go to|focus|click(?: on)?|select|open)(?: the)? (?:address|url) bar',
+                'stop': r'stop listening',
+            }
+            if action.kind in fixed and not re.fullmatch(fixed[action.kind] + r'[.!?]*', candidate, re.I):
+                raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+            if action.kind == 'routine':
+                from blok.routines import get_routine
+                if not get_routine(action.value):
+                    raise ValueError(f'Unknown routine: {restore(clause)}. Nothing was run.')
+
+        # Update active_context for subsequent clauses in the same compound plan
+        if action.kind in ('open', 'url'):
+            if action.kind == 'open':
+                active_context.active_app = action.value
+            elif action.kind == 'url':
+                active_context.active_url = action.value
+                for s in SITES:
+                    if s in action.value:
+                        active_context.active_site = s
+                        break
+        elif action.kind == 'web_task':
+            try:
+                t_obj = json.loads(action.value)
+                if t_obj.get('site'):
+                    active_context.active_site = t_obj['site']
+                if t_obj.get('action') == 'search':
+                    active_context.set_search_context(1, t_obj.get('url', ''), t_obj.get('site', 'google'), t_obj.get('query', ''))
+            except Exception:
+                pass
+
+        value = action.value
+        if action.kind in ('web_task', 'ui_control', 'obsidian_note'):
+            def expand(obj):
+                if isinstance(obj, str):
+                    return restore(obj)
+                if isinstance(obj, dict):
+                    return {k: expand(v) for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [expand(v) for v in obj]
+                return obj
+            value = json.dumps(expand(json.loads(value)))
+        elif action.kind == 'url':
+            for key, literal in literals.items():
+                value = value.replace(key, quote_plus(literal))
+        else:
+            value = restore(value)
+
+        step_id = f"step_{step_counter}"
+        domain, idemp, pre, post = _infer_step_attributes(action.kind, value)
+
+        # Subtask isolation: if domain switches (e.g. youtube -> spotify), bump subtask_counter
+        # A clause left for Laya (None) has no domain; it starts a new subtask.
+        if result:
+            prev_domain = result[-1][1].target_domain if result[-1][1] else None
+            if domain != prev_domain and not (prev_domain == "browser:general" and domain.startswith("browser:")):
+                subtask_counter += 1
+        subtask_id = f"subtask_{subtask_counter}"
+
+        deps: list[str] = []
+        input_binds: list[tuple[str, str]] = []
+        output_bind = None
+
+        if action.kind == "web_task" and '"action": "new_tab"' in value:
+            output_bind = "tab_id"
+
+        # Connect dependencies and bindings within the SAME subtask
+        if result:
+            prev_clause, prev_step = result[-1]
+            if prev_step and prev_step.subtask_id == subtask_id:
+                # Tab creation followed by search/navigation in browser:
+                if prev_step.action_type == "web_task" and '"action": "new_tab"' in prev_step.action_value:
+                    if domain.startswith("browser:"):
+                        deps.append(prev_step.step_id)
+                        input_binds.append(("target_tab_id", f"{prev_step.step_id}.tab_id"))
+                elif prev_step.target_domain == domain:
+                    deps.append(prev_step.step_id)
+                elif prev_step.action_type in ("open", "new_note") and action.kind in ("title", "write"):
+                    deps.append(prev_step.step_id)
+
+        risk, req_appr, reason = assess_step_risk(action.kind, value)
+        plan_step = PlanStep(
+            kind=action.kind,
+            value=value,
+            offset=getattr(action, "offset", 0),
+            step_id=step_id,
+            subtask_id=subtask_id,
+            domain_scope=domain,
+            target_domain=domain,
+            depends_on=tuple(deps),
+            idempotency=idemp,
+            preconditions=tuple(pre),
+            postconditions=tuple(post),
+            on_failure="ABORT_DEPENDENT",
+            output_binding=output_bind,
+            input_bindings=tuple(input_binds),
+            risk_level=risk,
+            requires_approval=req_appr,
+            approval_reason=reason,
+        )
+
+        result.append((restore(clause), plan_step))
+        i += consumed
+        step_counter += 1
+
+    return result

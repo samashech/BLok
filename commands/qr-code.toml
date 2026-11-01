@@ -1,0 +1,4 @@
+description = "Read a QR code on screen"
+phrases = ["scan [a] qr code", "read [the] qr code", "scan [this] qr"]
+run = "omarchy-capture-qr & disown"
+reply = "Select the QR code"

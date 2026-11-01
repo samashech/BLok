@@ -4,10 +4,10 @@ from pathlib import Path
 import subprocess
 import time
 ROOT=Path(__file__).resolve().parent.parent
-OUT=Path('/tmp/hyprash-motion')
+OUT=Path('/tmp/blok-motion')
 OUT.mkdir(exist_ok=True)
 def call(command):
-    return subprocess.check_output([str(ROOT/'hyprash.sh'),command],text=True)
+    return subprocess.check_output([str(ROOT/'blok.sh'),command],text=True)
 monitors=json.loads(subprocess.check_output(['hyprctl','-j','monitors']))
 monitor=next((m for m in monitors if m.get('focused')),monitors[0])
 width=int(monitor['width']/monitor['scale'])

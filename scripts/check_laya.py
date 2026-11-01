@@ -2,13 +2,13 @@
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash.decision import LayaDecision
+from blok.decision import LayaDecision
 agent=LayaDecision()
 agent.load()
 cases=[
  ('open browser',('open','browser')),
- ('open hyprash notes',('open','hyprash_notes')),
- ('open hyprash camera',('open','hyprash_camera')),
+ ('open blok notes',('open','blok_notes')),
+ ('open blok camera',('open','blok_camera')),
  ('Go to the address bar.',('address','')),
  ('Type weather in Delhi.',('browser_type','weather in delhi')),
  ('Press enter.',('browser_key','enter')),
@@ -30,7 +30,7 @@ cases=[
  ('hello how are you',None),
  ('delete all my files',None),
 ]
-from hyprash.commands import parse
+from blok.commands import parse
 for phrase in ['create a note saying hello in obsidian','play a justin bieber song','play a song by adele','open a new tab','search for bbs in youtube and play the first video','search for bbs in youtube and play the second video','open github and go to my repositories and find clickyAI and open it','run morning routine','start daily standup']:
     action=parse(phrase)[0]
     cases.append((phrase,(action.kind,action.value)))

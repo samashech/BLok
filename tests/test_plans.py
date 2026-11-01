@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import Mock
 
-from hyprash.backend import Backend
-from hyprash.commands import Action
-from hyprash.decision import LayaDecision
-from hyprash.plans import Plan, proposals, PlanStep
+from blok.backend import Backend
+from blok.commands import Action
+from blok.decision import LayaDecision
+from blok.plans import Plan, proposals, PlanStep
 
 
 class ProposalTests(unittest.TestCase):

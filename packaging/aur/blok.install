@@ -1,0 +1,7 @@
+post_install() {
+  echo "==> Finish setting up BLoK as your user (downloads the models you choose):"
+  echo "      blok setup"
+}
+post_upgrade() {
+  echo "==> BLoK updated. Restart it with: blok quit; blok"
+}

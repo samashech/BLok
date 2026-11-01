@@ -1,0 +1,4 @@
+description = "Toggle window gaps"
+phrases = ["toggle [the] gaps", "remove [the] gaps", "add [the] gaps", "toggle window gaps"]
+run = "omarchy-hyprland-window-gaps-toggle"
+reply = "Toggled window gaps"

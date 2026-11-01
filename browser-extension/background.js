@@ -9,7 +9,13 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase7-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase8-v1'};
+  if(req.action==='active') {
+    // Tab metadata only; no page script runs.
+    const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
+    if(!current)throw Error('No browser tab is active.');
+    return {tabId:current.id,tab_id:current.id,url:current.url,title:current.title,verified:true};
+  }
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
@@ -23,7 +29,7 @@ export async function run(req, progress=()=>{}) {
     if(!active||active.id!==tab?.id||active.windowId!==tab.windowId)throw Error('The active tab changed. Inspect the current screen again.');
     const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:pageAction,args:[args,true]});
     const result=results[0]?.result;
-    if(result?.hyprashError)throw Error(result.hyprashError);
+    if(result?.blokError)throw Error(result.blokError);
     if(result===undefined)throw Error('The page action did not return a result.');
     return result;
   }
@@ -108,6 +114,26 @@ export async function run(req, progress=()=>{}) {
         }catch(error){throw Error('Step '+(i+1)+' of '+task.steps.length+' failed: '+error.message);}
       }
       return result;
+    }
+    if(task.action==='pointer') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
+      return confirmed('Pointing at '+found.name,'Control under the mouse observed',{...found,tabId:tab.id});
+    }
+    if(task.action==='click_observed') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await focus(tab);
+      const result=await flow.act('Clicking it',()=>page({op:'click',control:task.control,page:task.page}));
+      return {...result,tabId:tab.id};
+    }
+    if(task.action==='site_search') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await loaded();
+      const before=tab.url;
+      await flow.act('Searching this site',()=>page({op:'site_search',query:task.query}));
+      await flow.verify('Waiting for results',async()=>{const t=await chrome.tabs.get(tab.id);return t.url!==before||t.status==='complete';},10000);
+      tab=await chrome.tabs.get(tab.id);
+      return confirmed('Searched '+new URL(tab.url).hostname+' for '+task.query,'Search submitted on the page',{url:tab.url,tabId:tab.id});
     }
     if(task.action==='links') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
@@ -253,7 +279,7 @@ export async function run(req, progress=()=>{}) {
 }
 function connect() {
   if(port)return;
-  const connection=chrome.runtime.connectNative('io.hyprash.browser');port=connection;
+  const connection=chrome.runtime.connectNative('io.blok.browser');port=connection;
   connection.onMessage.addListener(async req=>{
     let response;
     try {

@@ -1,4 +1,5 @@
 laya==0.4.1
 torch==2.14.1
+faster-whisper==1.2.1
 kokoro-onnx==0.6.1
 soundfile==0.14.0

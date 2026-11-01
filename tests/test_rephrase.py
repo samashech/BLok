@@ -2,9 +2,9 @@ import json
 import unittest
 from unittest.mock import patch, Mock
 
-from hyprash import rephrase
-from hyprash.backend import Backend
-from hyprash.decision import Decision
+from blok import rephrase
+from blok.backend import Backend
+from blok.decision import Decision
 
 
 def ollama_reply(command, question=''):
@@ -22,7 +22,7 @@ class RephraseTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def rewrite(self, said, command, question=''):
-        with patch('hyprash.rephrase.urllib.request.urlopen', return_value=ollama_reply(command, question)) as urlopen:
+        with patch('blok.rephrase.urllib.request.urlopen', return_value=ollama_reply(command, question)) as urlopen:
             result = rephrase.rewrite(said)
         self.request = json.loads(urlopen.call_args[0][0].data)
         return result
@@ -61,7 +61,7 @@ class ModelChoiceTests(unittest.TestCase):
 
     def choose(self, *names):
         rephrase._models.update(checked=0.0, name=None)
-        with patch('hyprash.rephrase.urllib.request.urlopen', return_value=self.tags(*names)):
+        with patch('blok.rephrase.urllib.request.urlopen', return_value=self.tags(*names)):
             return rephrase.model_name()
 
     def test_prefers_installed_qwen_then_gemma_never_vision(self):
@@ -78,7 +78,7 @@ class BackendRephraseTests(unittest.TestCase):
 
     def run_with(self, rewrite, plans):
         self.model.plan.side_effect = plans
-        with patch('hyprash.rephrase.rewrite', return_value=rewrite):
+        with patch('blok.rephrase.rewrite', return_value=rewrite):
             return self.backend.plan_with_rephrase(self.model, self.backend.generation, 'yo turn it down man', None)
 
     def test_rewrite_plan_is_used(self):

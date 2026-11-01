@@ -2,9 +2,9 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from hyprash.backend import Backend
-from hyprash.commands import Action
-from hyprash import desktop
+from blok.backend import Backend
+from blok.commands import Action
+from blok import desktop
 
 
 class DesktopDiscoveryTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class DesktopDiscoveryTests(unittest.TestCase):
         backend=Backend();events=[];backend.emit=lambda **event:events.append(event)
         active={'address':'0x1','pid':42,'title':'Notes','class':'notes'}
         task={'action':'click','target':'Save'}
-        with patch('hyprash.browser.run',return_value=json.dumps(active)), \
+        with patch('blok.browser.run',return_value=json.dumps(active)), \
              patch.object(desktop,'inspect',return_value=self.observation), \
              patch.object(desktop,'select_control',return_value=self.observation['controls'][1]) as select, \
              patch.object(desktop,'control',return_value={'message':'Activated Save','verified':False,'evidence':'Action dispatched'}) as control:

@@ -89,4 +89,19 @@ try{
  const results=await page.evaluate(pageAction,{op:'result_links'});
  assert.deepEqual(results.links.map(l=>l.name),['Normal second']);
  console.log('PASS: download links ranked (Linux first, non-downloads dropped) and Google result list');
+ await page.setContent(`<div style="padding:40px"><button id=sub style="width:120px;height:40px" onclick="this.dataset.clicked='yes'"><span>Subscribe</span></button><p style="margin-top:80px">plain text</p></div>`);
+ await page.evaluate(await readFile(new URL('../browser-extension/pointer.js',import.meta.url),'utf8'));
+ const box=await page.locator('#sub').boundingBox();
+ await page.mouse.move(box.x+30,box.y+20);
+ const pointed=await page.evaluate(pageAction,{op:'pointer'});
+ assert.equal(pointed.name,'Subscribe');
+ await page.evaluate(pageAction,{op:'click',control:pointed.control,page:pointed.page});
+ assert.equal(await page.locator('#sub').getAttribute('data-clicked'),'yes');
+ await page.mouse.move(box.x+30,box.y+150);
+ await assert.rejects(page.evaluate(pageAction,{op:'pointer'}),/not over a button/);
+ await page.route('https://shop.example.net/**',r=>r.fulfill({contentType:'text/html',body:`<header><form action="/find"><input type="search" name="term" placeholder="Search the store"></form></header>`}));
+ await page.goto('https://shop.example.net/');
+ await page.evaluate(pageAction,{op:'site_search',query:'phantom blade'});
+ await page.waitForURL('**/find?term=phantom+blade');
+ console.log('PASS: click what the mouse points at (and refuse plain text), on-page site search');
 }finally{await browser.close();}

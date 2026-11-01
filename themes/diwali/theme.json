@@ -1,0 +1,10 @@
+{
+  "id": "diwali", "name": "Diwali", "followDesktop": false,
+  "radius": 4, "controlRadius": 4, "font": "JetBrainsMono Nerd Font", "mode": "dark",
+  "background": "#0f0a05", "backgroundTop": "#16100a", "backgroundBottom": "#0b0703",
+  "foreground": "#f3e6cf", "muted": "#c9a86a", "accent": "#ffb627",
+  "border": "#b8862b", "surface": "#1a130a", "hover": "#2a1e10",
+  "success": "#ffd166", "error": "#ff6f59", "orb": "#ffb627", "orbSecondary": "#ffe7a3",
+  "ring": "sparks", "badge": "🪔", "micIcon": "🪔",
+  "dot": "#ffb627", "iconColor": "#c9963a", "micBorder": "#ffb627", "glow": "#ffb627"
+}

@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from hyprash.backend import Backend
-from hyprash.commands import Action, parse
-from hyprash.decision import LayaDecision
-from hyprash.plans import proposals
-from hyprash.routines import (
+from blok.backend import Backend
+from blok.commands import Action, parse
+from blok.decision import LayaDecision
+from blok.plans import proposals
+from blok.routines import (
     BUILTIN_ROUTINES,
     Precondition,
     Routine,
@@ -19,7 +19,7 @@ from hyprash.routines import (
     save_routine_dict,
     validate_routine_dict,
 )
-from hyprash.workflows import workflow
+from blok.workflows import workflow
 
 
 class RoutineDefinitionTests(unittest.TestCase):
@@ -117,36 +117,36 @@ class RoutineCatalogTests(unittest.TestCase):
 
 class PreconditionCheckTests(unittest.TestCase):
     def test_browser_precondition_success(self):
-        with patch('hyprash.browser.request', return_value={'message': 'Brave connected'}):
+        with patch('blok.browser.request', return_value={'message': 'Brave connected'}):
             ok, reason = check_precondition(Precondition('browser'))
             self.assertTrue(ok)
             self.assertEqual(reason, '')
 
     def test_browser_precondition_failure(self):
-        with patch('hyprash.browser.request', return_value={'message': 'Not connected'}):
+        with patch('blok.browser.request', return_value={'message': 'Not connected'}):
             ok, reason = check_precondition(Precondition('browser'))
             self.assertFalse(ok)
             self.assertIn('not connected', reason)
 
     def test_vault_precondition_success(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with patch('hyprash.desktop.obsidian_vault', return_value=('vault_id', Path(tmp))):
+            with patch('blok.desktop.obsidian_vault', return_value=('vault_id', Path(tmp))):
                 ok, reason = check_precondition(Precondition('vault'))
                 self.assertTrue(ok)
 
     def test_vault_precondition_failure(self):
-        with patch('hyprash.desktop.obsidian_vault', return_value=None):
+        with patch('blok.desktop.obsidian_vault', return_value=None):
             ok, reason = check_precondition(Precondition('vault'))
             self.assertFalse(ok)
             self.assertIn('No configured Obsidian vault', reason)
 
     def test_app_precondition_success(self):
-        with patch('hyprash.desktop.catalog', return_value=['gedit', 'terminal']):
+        with patch('blok.desktop.catalog', return_value=['gedit', 'terminal']):
             ok, reason = check_precondition(Precondition('app', 'terminal'))
             self.assertTrue(ok)
 
     def test_app_precondition_failure(self):
-        with patch('hyprash.desktop.catalog', return_value=['gedit']):
+        with patch('blok.desktop.catalog', return_value=['gedit']):
             ok, reason = check_precondition(Precondition('app', 'nonexistent_tool'))
             self.assertFalse(ok)
             self.assertIn('not installed', reason)
@@ -169,7 +169,7 @@ class PreconditionCheckTests(unittest.TestCase):
             preconditions=(Precondition('notes'), Precondition('vault')),
             steps=(Action('open', 'notes'),),
         )
-        with patch('hyprash.desktop.obsidian_vault', return_value=None):
+        with patch('blok.desktop.obsidian_vault', return_value=None):
             ok, reason = check_routine_preconditions(routine)
             self.assertFalse(ok)
             self.assertIn('Obsidian vault', reason)
@@ -242,8 +242,8 @@ class BackendExecutionTests(unittest.TestCase):
             preconditions=(Precondition('browser'),),
             steps=(Action('open', 'notes'), Action('photo', '')),
         )
-        with patch('hyprash.routines.get_routine', return_value=routine), \
-             patch('hyprash.routines.check_routine_preconditions', return_value=(False, 'Brave is closed')):
+        with patch('blok.routines.get_routine', return_value=routine), \
+             patch('blok.routines.check_routine_preconditions', return_value=(False, 'Brave is closed')):
             success = self.backend.execute(Action('routine', 'mock_browser_routine'))
             self.assertFalse(success)
             # Precondition failure is emitted as an error action

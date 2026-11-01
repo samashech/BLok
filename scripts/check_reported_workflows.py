@@ -2,8 +2,8 @@
 import json,sys,time
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash.commands import parse
-from hyprash.browser import request
+from blok.commands import parse
+from blok.browser import request
 phrases={
  'tab':'open a new tab',
  'artist':'play a justin bieber song',

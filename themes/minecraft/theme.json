@@ -1,0 +1,10 @@
+{
+  "id": "minecraft", "name": "Minecraft", "followDesktop": false,
+  "radius": 0, "controlRadius": 0, "pixelFrame": true, "font": "JetBrainsMono Nerd Font", "mode": "dark",
+  "background": "#17130f", "backgroundTop": "#1d1813", "backgroundBottom": "#13100c",
+  "foreground": "#e6e6e6", "muted": "#9a9a9a", "accent": "#6aa84f",
+  "border": "#000000", "innerEdge": "#3f5e2c", "surface": "#2a2a2a", "hover": "#363636",
+  "success": "#7cc35a", "error": "#c9563c", "orb": "#6aa84f", "orbSecondary": "#6aa84f",
+  "ring": "pixels", "badge": "creeper", "micIcon": "pickaxe",
+  "dot": "#6aa84f", "iconColor": "#9a9a9a", "micBorder": "#4a4a4a"
+}

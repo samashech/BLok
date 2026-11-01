@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Latency Profiler for Hyprash Phase 6.
+"""Latency Profiler for BLoK Phase 6.
 
 Profiles monotonic execution times (monotonic_ns) across each pipeline stage:
 1. PTT-to-transcript (Voxtype speech recognition)
@@ -21,9 +21,9 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hyprash.diagnostics import StageTimer, record_trace, get_diagnostics_summary, clear_traces
-from hyprash.nlu import normalize_utterance, resolve_intent, ConversationContext
-from hyprash.plans import proposals, Plan, PlanStep
+from blok.diagnostics import StageTimer, record_trace, get_diagnostics_summary, clear_traces
+from blok.nlu import normalize_utterance, resolve_intent, ConversationContext
+from blok.plans import proposals, Plan, PlanStep
 
 
 BENCHMARK_PROMPTS = [
@@ -64,7 +64,7 @@ def run_benchmark(sample_runs: int = 5, use_laya: bool = False) -> dict:
     laya_agent = None
     if use_laya:
         try:
-            from hyprash.decision import LayaDecision
+            from blok.decision import LayaDecision
             laya_agent = LayaDecision()
             laya_agent.load()
         except Exception as e:
@@ -135,7 +135,7 @@ def run_benchmark(sample_runs: int = 5, use_laya: bool = False) -> dict:
 
 def print_table(summary: dict):
     print("\n" + "=" * 78)
-    print("HYPRASH PHASE 6 LATENCY & PERFORMANCE PROFILE".center(78))
+    print("BLOK PHASE 6 LATENCY & PERFORMANCE PROFILE".center(78))
     print("=" * 78)
     print(f"Total Evaluated Commands: {summary.get('sample_count', 0)}")
     print(f"Cold Start Total (ms)   : {summary.get('cold_start_total_ms', 0.0):.2f} ms")
@@ -176,7 +176,7 @@ def print_table(summary: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Profile Hyprash Phase 6 Latencies")
+    parser = argparse.ArgumentParser(description="Profile BLoK Phase 6 Latencies")
     parser.add_argument("--samples", type=int, default=5, help="Number of benchmark iterations")
     parser.add_argument("--laya", action="store_true", help="Include active Laya model inference")
     parser.add_argument("--json", action="store_true", help="Output summary in JSON format")

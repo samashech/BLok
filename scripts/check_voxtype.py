@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash.speech import VoxtypeSession
-from hyprash import browser
+from blok.speech import VoxtypeSession
+from blok import browser
 
 voice=VoxtypeSession()
 try:

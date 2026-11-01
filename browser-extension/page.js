@@ -34,7 +34,7 @@ export async function pageAction(request, captureErrors=false) {
     visit(document);return found.filter(visible);
   };
   const nodes = allNodes();
-  const registry = globalThis.__hyprashControlRegistry ||= {next:0,ids:new WeakMap()};
+  const registry = globalThis.__blokControlRegistry ||= {next:0,ids:new WeakMap()};
   const idOf = e => {
     let id=registry.ids.get(e);
     if(!id){id='control-'+(++registry.next);registry.ids.set(e,id);}
@@ -80,6 +80,29 @@ export async function pageAction(request, captureErrors=false) {
     const result={url:location.href,title:document.title,page:page(),controls};
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
+  }
+  if(request.op==='pointer') {
+    const point=globalThis.__blokPointer;
+    if(!point||Date.now()-point.t>10*60*1000) throw Error('Move the mouse over it first. If you just updated BLoK, reload this page once.');
+    let e=document.elementFromPoint(point.x,point.y);
+    while(e?.shadowRoot){const inner=e.shadowRoot.elementFromPoint(point.x,point.y);if(!inner||inner===e)break;e=inner;}
+    if(e?.tagName==='IFRAME') throw Error('That is inside an embedded frame; say the button name instead.');
+    const hit=new Set(nodes);
+    for(let n=e;n;n=n.parentElement||n.getRootNode()?.host){if(hit.has(n)){e=n;break;}if(!n.parentElement&&!n.getRootNode()?.host){e=null;break;}}
+    if(!e) throw Error('The mouse is not over a button or link. Point at it, or say its name.');
+    if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
+    return {url:location.href,page:page(),name:name(e).trim().slice(0,140)||e.getAttribute('title')||roleOf(e),control:descriptor(e)};
+  }
+  if(request.op==='site_search') {
+    const fields=[...document.querySelectorAll('input[type="search"],[role="searchbox"],input[name="q"],input[name="query"],input[name="search"],input[name="term"],input[name="s"],input[name="k"],input[placeholder*="search" i],input[aria-label*="search" i],textarea[name="q"]')].filter(e=>visible(e)&&!e.disabled&&!e.readOnly);
+    const field=fields[0];
+    if(!field) throw Error('This page has no search box I can find. Say "search google for …" instead.');
+    setValue(field,request.query);
+    const form=field.closest('form');
+    if(form) form.requestSubmit(); else {
+      for(const type of ['keydown','keypress','keyup']) field.dispatchEvent(new KeyboardEvent(type,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));
+    }
+    return message('Submitted site search');
   }
   if(request.op==='links') {
     // Candidate links/buttons for a download. Laya chooses among them in Python.
@@ -250,7 +273,7 @@ export async function pageAction(request, captureErrors=false) {
   }
   throw Error('Unsupported browser action');
   } catch(error) {
-    if(captureErrors)return {hyprashError:error.message};
+    if(captureErrors)return {blokError:error.message};
     throw error;
   }
 }

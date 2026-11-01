@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash import desktop
+from blok import desktop
 for app in sys.argv[1:] or ['notes','camera']:
     print('LAUNCH',app,desktop.launch(app),flush=True)
     try:print('CONTROLS',desktop.control({'action':'inspect'}),flush=True)

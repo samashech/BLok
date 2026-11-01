@@ -7,7 +7,7 @@ import Quickshell
 FloatingWindow {
     id: window
     required property var theme
-    title: "Hyprash · Camera"
+    title: "BLoK · Camera"
     implicitWidth: 720; implicitHeight: 500
     color: theme.background; visible: false
     signal feedback(string message)

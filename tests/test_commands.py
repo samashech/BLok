@@ -2,8 +2,8 @@ import tempfile
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-from hyprash.commands import parse, StreamPlanner, Action
-from hyprash.backend import Backend
+from blok.commands import parse, StreamPlanner, Action
+from blok.backend import Backend
 
 class CommandTests(unittest.TestCase):
     def values(self, text, final=True):
@@ -62,7 +62,7 @@ class BackendTests(unittest.TestCase):
         self.events=[]
         self.backend.emit=lambda **e:self.events.append(e)
         self.temp=tempfile.TemporaryDirectory()
-        self.data=patch('hyprash.backend.DATA',Path(self.temp.name))
+        self.data=patch('blok.backend.DATA',Path(self.temp.name))
         self.data.start()
 
     def tearDown(self):
@@ -80,7 +80,7 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(len(list(Path(self.temp.name).glob('notes/*.json'))),1)
 
     def test_launch_uses_argument_list_and_reports_failure(self):
-        with patch('hyprash.browser.request',side_effect=RuntimeError('launch failed')) as run:
+        with patch('blok.browser.request',side_effect=RuntimeError('launch failed')) as run:
             self.backend.execute(Action('url','https://google.com/search?q=hello'))
         self.assertEqual(run.call_count,1)
         self.assertEqual(run.call_args.args,({'action':'navigate','url':'https://google.com/search?q=hello'},))

@@ -1,8 +1,8 @@
 import json
 import unittest
 from unittest.mock import Mock, patch
-from hyprash.commands import parse,Action
-from hyprash.backend import Backend
+from blok.commands import parse,Action
+from blok.backend import Backend
 
 class WorkflowTests(unittest.TestCase):
     def test_destinations_stay_attached_to_queries(self):
@@ -28,16 +28,16 @@ class WorkflowTests(unittest.TestCase):
     def test_cancelled_workflow_never_reaches_browser(self):
         self.assertEqual(parse("don't open spotify and play music"),[])
     def test_builtin_apps_can_be_explicit(self):
-        self.assertEqual(parse('open hyprash notes')[0].value,'hyprash_notes')
-        self.assertEqual(parse('open hyprash camera')[0].value,'hyprash_camera')
+        self.assertEqual(parse('open blok notes')[0].value,'blok_notes')
+        self.assertEqual(parse('open blok camera')[0].value,'blok_camera')
     def test_installed_notes_selected_when_present(self):
         b=Backend();b.emit=Mock()
-        with patch('hyprash.desktop.launch',return_value=True):b.execute(Action('open','notes'))
+        with patch('blok.desktop.launch',return_value=True):b.execute(Action('open','notes'))
         self.assertEqual(b.notes_target,'obsidian')
     def test_builtin_notes_fallback(self):
         b=Backend();b.emit=Mock();b.publish_note=Mock();b.ensure_note=Mock()
-        with patch('hyprash.desktop.launch',return_value=False):b.execute(Action('open','notes'))
-        self.assertEqual(b.notes_target,'hyprash');b.publish_note.assert_called_once()
+        with patch('blok.desktop.launch',return_value=False):b.execute(Action('open','notes'))
+        self.assertEqual(b.notes_target,'blok');b.publish_note.assert_called_once()
 
     def test_reported_compound_requests(self):
         for phrase,action in [
@@ -60,7 +60,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(action.kind,'obsidian_note')
         self.assertEqual(json.loads(action.value),{'content':'hello'})
         backend=Backend();backend.emit=Mock()
-        with patch('hyprash.desktop.create_obsidian_note',return_value='hello') as create:
+        with patch('blok.desktop.create_obsidian_note',return_value='hello') as create:
             backend.execute(action)
             create.assert_called_once_with('hello')
         self.assertEqual(backend.notes_target,'obsidian')
@@ -69,7 +69,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(parse("don't search for bbs in youtube and play the second video"),[])
 
     def test_obsidian_uri_uses_percent_encoded_spaces(self):
-        from hyprash import desktop
+        from blok import desktop
         import tempfile
         from pathlib import Path
         with tempfile.TemporaryDirectory() as directory:

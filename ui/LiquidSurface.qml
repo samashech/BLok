@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import "LiquidMotion.js" as Motion
 
 // Native port: Libraries.dev's sampled springs + Gaussian/alpha goo merge.
@@ -14,6 +15,11 @@ Item {
     property color background: "#0c0e14"
     property color backgroundBottom: "#090b10"
     property color edge: "#434754"
+    // Seasonal frames: cut corners, a doubled pixel border, and a soft outer glow.
+    property real chamfer: 0
+    property bool pixelFrame: false
+    property color innerEdge: "transparent"
+    property color glow: "transparent"
     readonly property real p: Math.max(0, Math.min(1, reveal))
     function segment(a,b) { return Math.max(0,Math.min(1,(p-a)/(b-a))) }
     function smooth(a,b) { let t=segment(a,b); return t*t*(3-2*t) }
@@ -97,6 +103,8 @@ Item {
     ShaderEffect {
         anchors.fill: parent
         visible: liquid.p>0
+        // A cut-corner frame replaces the rounded body once it settles.
+        opacity: liquid.chamfer > 0 ? 1-liquid.smooth(0.9,1) : 1
         property variant source: blurred
         property vector2d resolution: Qt.vector2d(width,height)
         property real softness: liquid.gooSoftness
@@ -107,6 +115,58 @@ Item {
     }
     // Resolve to exact theme geometry after the fluid silhouette settles.
     Rectangle {
+        // Outer glow (transparent unless a theme asks for it).
+        x: (parent.width-liquid.bodyWidth)/2 - 3
+        y: liquid.bodyTop - 3
+        width: liquid.bodyWidth + 6; height: liquid.bodyHeight + 6
+        radius: liquid.chamfer > 0 ? 0 : liquid.cornerRadius + 3
+        color: "transparent"; border.width: 3; border.color: liquid.glow
+        opacity: liquid.smooth(0.92,1) * 0.35
+        visible: liquid.glow.a > 0 && liquid.chamfer === 0
+    }
+    Shape {
+        id: chamferFrame
+        visible: liquid.chamfer > 0
+        x: (parent.width-liquid.bodyWidth)/2
+        y: liquid.bodyTop
+        width: liquid.bodyWidth; height: liquid.bodyHeight
+        opacity: liquid.smooth(0.92,1)
+        preferredRendererType: Shape.CurveRenderer
+        readonly property real c: Math.min(liquid.chamfer, width/4, height/4)
+        ShapePath {
+            strokeColor: liquid.glow.a > 0 ? Qt.rgba(liquid.glow.r, liquid.glow.g, liquid.glow.b, 0.3) : "transparent"
+            strokeWidth: 5
+            fillColor: "transparent"
+            startX: chamferFrame.c; startY: 0
+            PathLine { x: chamferFrame.width-chamferFrame.c; y: 0 }
+            PathLine { x: chamferFrame.width; y: chamferFrame.c }
+            PathLine { x: chamferFrame.width; y: chamferFrame.height-chamferFrame.c }
+            PathLine { x: chamferFrame.width-chamferFrame.c; y: chamferFrame.height }
+            PathLine { x: chamferFrame.c; y: chamferFrame.height }
+            PathLine { x: 0; y: chamferFrame.height-chamferFrame.c }
+            PathLine { x: 0; y: chamferFrame.c }
+            PathLine { x: chamferFrame.c; y: 0 }
+        }
+        ShapePath {
+            strokeColor: liquid.edge; strokeWidth: 1.5
+            fillGradient: LinearGradient {
+                x1: 0; y1: 0; x2: 0; y2: chamferFrame.height
+                GradientStop { position: 0; color: liquid.backgroundTop }
+                GradientStop { position: 1; color: liquid.backgroundBottom }
+            }
+            startX: chamferFrame.c; startY: 0
+            PathLine { x: chamferFrame.width-chamferFrame.c; y: 0 }
+            PathLine { x: chamferFrame.width; y: chamferFrame.c }
+            PathLine { x: chamferFrame.width; y: chamferFrame.height-chamferFrame.c }
+            PathLine { x: chamferFrame.width-chamferFrame.c; y: chamferFrame.height }
+            PathLine { x: chamferFrame.c; y: chamferFrame.height }
+            PathLine { x: 0; y: chamferFrame.height-chamferFrame.c }
+            PathLine { x: 0; y: chamferFrame.c }
+            PathLine { x: chamferFrame.c; y: 0 }
+        }
+    }
+    Rectangle {
+        visible: liquid.chamfer === 0
         x: (parent.width-liquid.bodyWidth)/2
         y: liquid.bodyTop
         width: liquid.bodyWidth; height: liquid.bodyHeight
@@ -116,8 +176,14 @@ Item {
             GradientStop { position: 0; color: liquid.backgroundTop }
             GradientStop { position: 1; color: liquid.backgroundBottom }
         }
-        border.width: 1
+        border.width: liquid.pixelFrame ? 3 : 1
         border.color: liquid.edge
+        Rectangle {
+            // Inner bevel line for the pixel frame.
+            visible: liquid.pixelFrame
+            anchors.fill: parent; anchors.margins: 3
+            color: "transparent"; border.width: 2; border.color: liquid.innerEdge
+        }
     }
 
 }

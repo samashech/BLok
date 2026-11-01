@@ -1,4 +1,4 @@
-"""Tests for Multi-Level Subtask DAG and Fault Isolation in Hyprash.
+"""Tests for Multi-Level Subtask DAG and Fault Isolation in BLoK.
 
 Tests:
 1. Dynamic Tab-ID binding and runtime propagation between DAG nodes.
@@ -12,10 +12,10 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from hyprash.backend import Backend
-from hyprash.commands import Action
-from hyprash.nlu import ConversationContext
-from hyprash.plans import (
+from blok.backend import Backend
+from blok.commands import Action
+from blok.nlu import ConversationContext
+from blok.plans import (
     Plan,
     PlanStep,
     assess_step_risk,

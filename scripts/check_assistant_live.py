@@ -3,7 +3,7 @@ import json,subprocess,time,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 
-def call(*args):return subprocess.check_output([str(ROOT/'hyprash.sh'),*args],text=True)
+def call(*args):return subprocess.check_output([str(ROOT/'blok.sh'),*args],text=True)
 
 def command(text,expected):
     call('text',text)
@@ -17,7 +17,7 @@ def command(text,expected):
         time.sleep(.2)
     raise AssertionError(status)
 try:
-    command('open notes','Opened Hyprash Notes')
+    command('open notes','Opened BLoK Notes')
     command('click the note title','Focused note title')
     command('click Close','Closed Notes')
     command('open camera','Opened camera')

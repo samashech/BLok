@@ -21,7 +21,7 @@ globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v
   else if(req.op==='result'){assert.equal(req.index,2);result={url:'https://www.youtube.com/watch?v=second',title:'Second video'};}
   else if(req.op==='video_ready')result=true;
   else if(req.op==='video_play'||req.op==='video_playing')result={playing:true};
-  else if(req.op==='play')result=playError?{hyprashError:'The click result is uncertain'}:{track:'Baby',trackUrl:'https://open.spotify.com/track/baby'};
+  else if(req.op==='play')result=playError?{blokError:'The click result is uncertain'}:{track:'Baby',trackUrl:'https://open.spotify.com/track/baby'};
   else if(req.op==='playing'){assert.equal(req.trackUrl,'https://open.spotify.com/track/baby');result={playing:!wrongPlayback};}
   else if(req.op==='click'){assert.equal(req.control?.id,'control-1');assert.equal(req.control?.fingerprint,'button|save|button||');assert.equal(req.page,'fixture-page');result={message:'Clicked Save · result not verified',verified:false};}
   else if(req.op==='github_user')result={user:'fixture-user'};

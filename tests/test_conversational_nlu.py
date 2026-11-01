@@ -1,4 +1,4 @@
-"""Comprehensive tests for conversational natural language understanding in Hyprash.
+"""Comprehensive tests for conversational natural language understanding in BLoK.
 
 Tests 40+ conversational variations across:
 1. Casual slang & phrasal verbs
@@ -12,14 +12,14 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from hyprash.nlu import (
+from blok.nlu import (
     ConversationContext,
     ResolvedIntent,
     normalize_utterance,
     repair_self_corrections,
     resolve_intent,
 )
-from hyprash.plans import proposals
+from blok.plans import proposals
 
 
 class ConversationalNLUTests(unittest.TestCase):
@@ -201,9 +201,9 @@ class ConversationalNLUTests(unittest.TestCase):
         self.assertEqual(getattr(step1, "output_binding", None), "tab_id")
         self.assertIn("target_tab_id", getattr(step2, "input_bindings_dict", {}))
 
-    @patch("hyprash.routines.get_routine")
+    @patch("blok.routines.get_routine")
     def test_compound_routine_proposal(self, mock_get_routine):
-        from hyprash.routines import Routine
+        from blok.routines import Routine
         mock_get_routine.return_value = Routine("morning_flow", "Morning flow", [], [{"kind": "open", "value": "notes"}])
         steps = proposals("run routine morning_flow and open code", self.context)
         self.assertEqual(len(steps), 2)
@@ -262,7 +262,7 @@ class ConversationalNLUTests(unittest.TestCase):
 
     # --- 7. Local Gemma 2B Structured Task Compiler & Fallback (5 tests) ---
     def test_gemma_task_compiler_fastpath(self):
-        from hyprash.llm_parser import compile_task
+        from blok.llm_parser import compile_task
         task = compile_task("open a new tab", self.context)
         self.assertTrue(task.understood)
         self.assertEqual(task.parser_used, "fastpath")
@@ -270,7 +270,7 @@ class ConversationalNLUTests(unittest.TestCase):
         self.assertEqual(task.subtasks[0].intent, "open_tab")
 
     def test_gemma_task_compiler_deterministic_fallback(self):
-        from hyprash.llm_parser import compile_task_fallback
+        from blok.llm_parser import compile_task_fallback
         task = compile_task_fallback("fire up foot and search for arch linux", self.context)
         self.assertTrue(task.understood)
         self.assertEqual(len(task.subtasks), 2)
@@ -278,7 +278,7 @@ class ConversationalNLUTests(unittest.TestCase):
         self.assertEqual(task.subtasks[1].intent, "search")
 
     def test_gemma_task_compiler_mocked_llm_json(self):
-        from hyprash.llm_parser import call_gemma_compiler, compiled_task_to_plan
+        from blok.llm_parser import call_gemma_compiler, compiled_task_to_plan
         mock_response = json.dumps({
             "understood": True,
             "needs_clarification": False,

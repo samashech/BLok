@@ -5,7 +5,9 @@ import sys
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = ROOT / 'models' / 'kokoro'
+sys.path.insert(0, str(ROOT))
+from blok.paths import MODELS  # noqa: E402
+TARGET = MODELS / 'kokoro'
 RELEASE = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/'
 FILES = ('kokoro-v1.0.onnx', 'voices-v1.0.bin')
 
@@ -33,5 +35,6 @@ def fetch(name):
 
 if __name__ == '__main__':
     TARGET.mkdir(parents=True, exist_ok=True)
-    for name in FILES:
+    # --int8: the quantized model (~88 MB instead of ~310 MB), slightly lower quality.
+    for name in (('kokoro-v1.0.int8.onnx', FILES[1]) if '--int8' in sys.argv else FILES):
         fetch(name)

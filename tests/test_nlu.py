@@ -1,4 +1,4 @@
-"""Tests for Hyprash Natural Language Understanding (NLU) pipeline.
+"""Tests for BLoK Natural Language Understanding (NLU) pipeline.
 
 Validates conversational normalization, deterministic intent resolution,
 slot extraction, entity preservation, contextual continuations, and TTL expiration.
@@ -7,7 +7,7 @@ import json
 import time
 import unittest
 
-from hyprash.nlu import (
+from blok.nlu import (
     ConversationContext,
     ResolvedIntent,
     normalize_utterance,
@@ -21,7 +21,7 @@ class ConversationalNormalizationTests(unittest.TestCase):
         cases = [
             ("can you please open a new tab", "open a new tab"),
             ("could you open Spotify", "open Spotify"),
-            ("hey Hyprash, open terminal", "open terminal"),
+            ("hey BLoK, open terminal", "open terminal"),
             ("okay please search for games", "search for games"),
             ("i want you to search for weather", "search for weather"),
             ("let's play God's Plan on Spotify", "play God's Plan on Spotify"),

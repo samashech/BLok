@@ -6,7 +6,7 @@ import Quickshell
 FloatingWindow {
     id: notes
     required property var theme
-    title: "Hyprash · Notes"
+    title: "BLoK · Notes"
     visible: false
     implicitWidth: 660; implicitHeight: 480
     color: theme.background

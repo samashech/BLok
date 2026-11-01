@@ -13,8 +13,8 @@ import time
 import uuid
 
 runtime=Path(os.environ.get('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'))
-path=runtime/'hyprash-browser.sock'
-lock=open(runtime/'hyprash-browser.lock','w')
+path=runtime/'blok-browser.sock'
+lock=open(runtime/'blok-browser.lock','w')
 try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 except BlockingIOError: raise SystemExit(0)
 path.unlink(missing_ok=True)
@@ -42,7 +42,7 @@ def client(conn):
     try:
         conn.settimeout(50)
         request=json.loads(conn.makefile('rb').readline(16384))
-        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill','new_tab','sequence','github_repo','next_track','links','download','click_download'}:raise ValueError('Unsupported action')
+        if request.get('action') not in {'ping','cancel','inspect','search','navigate','result','play','click','fill','new_tab','sequence','github_repo','next_track','links','download','click_download','active','pointer','click_observed','site_search'}:raise ValueError('Unsupported action')
         request['id']=key;pending[key]=queue.Queue()
         payload=json.dumps(request).encode()
         with write_lock:

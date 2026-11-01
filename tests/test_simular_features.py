@@ -12,11 +12,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from hyprash.backend import Backend
-from hyprash.commands import Action
-from hyprash.plans import Plan, PlanStep
-from hyprash.recording import SessionActionRecorder, compile_routine, infer_routine_preconditions
-from hyprash.routines import get_routine, list_routines
+from blok.backend import Backend
+from blok.commands import Action
+from blok.plans import Plan, PlanStep
+from blok.recording import SessionActionRecorder, compile_routine, infer_routine_preconditions
+from blok.routines import get_routine, list_routines
 
 
 class SimularFeaturesTests(unittest.TestCase):
@@ -228,7 +228,7 @@ class SimularFeaturesTests(unittest.TestCase):
         self.assertEqual(saved.name, "daily_standup")
 
     def test_voice_driven_routine_recording_workflow(self):
-        with patch("hyprash.backend.DATA", self.data_dir):
+        with patch("blok.backend.DATA", self.data_dir):
             # 1. Start recording
             self.backend.transcript("start recording routine morning_coffee", final=True)
             self.assertEqual(self.backend.recording_routine_name, "morning_coffee")
@@ -251,7 +251,7 @@ class SimularFeaturesTests(unittest.TestCase):
             self.assertEqual(len(routine.steps), 2)
 
     def test_save_recent_actions_as_routine(self):
-        with patch("hyprash.backend.DATA", self.data_dir):
+        with patch("blok.backend.DATA", self.data_dir):
             # Execute some actions
             self.backend.action_recorder.record(Action("open", "code"), label="Open code")
             self.backend.action_recorder.record(Action("open", "terminal"), label="Open terminal")

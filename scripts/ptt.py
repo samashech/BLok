@@ -7,17 +7,17 @@ import subprocess
 import sys
 root=Path(__file__).resolve().parent.parent
 runtime=Path(os.environ.get('XDG_RUNTIME_DIR',f'/run/user/{os.getuid()}'))
-held=runtime/'hyprash-key-held'
-lock=open(runtime/'hyprash-ptt.lock','w')
+held=runtime/'blok-key-held'
+lock=open(runtime/'blok-ptt.lock','w')
 def ipc(method):
-    return subprocess.run(['quickshell','ipc','-p',str(root/'ui'),'call','hyprash',method],capture_output=True,timeout=8)
+    return subprocess.run(['quickshell','ipc','-p',str(root/'ui'),'call','blok',method],capture_output=True,timeout=8)
 if sys.argv[1]=='start':
     with lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         if held.exists():raise SystemExit(0)
         held.touch(mode=0o600)
-    subprocess.run([str(root/'hyprash.sh'),'show'],check=True,timeout=10)
-    with open(runtime/'hyprash-ptt.lock','w') as guard:
+    subprocess.run([str(root/'blok.sh'),'show'],check=True,timeout=10)
+    with open(runtime/'blok-ptt.lock','w') as guard:
         fcntl.flock(guard,fcntl.LOCK_EX)
         if held.exists():ipc('beginRecording')
 else:

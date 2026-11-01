@@ -2,7 +2,7 @@
 import sys,time
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-from hyprash.browser import request
+from blok.browser import request
 if len(sys.argv)>1 and sys.argv[1]=='spotify':
     print(request({'action':'play','site':'spotify','query':"god's plan"}),flush=True)
 else:

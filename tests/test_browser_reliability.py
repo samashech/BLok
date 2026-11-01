@@ -13,17 +13,17 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from hyprash.backend import Backend
-from hyprash.browser import BrowserTaskError, ping
-import hyprash.browser as browser_mod
-from hyprash.commands import Action
-from hyprash.nlu import ConversationContext, resolve_intent
-from hyprash.plans import Plan, PlanStep
+from blok.backend import Backend
+from blok.browser import BrowserTaskError, ping
+import blok.browser as browser_mod
+from blok.commands import Action
+from blok.nlu import ConversationContext, resolve_intent
+from blok.plans import Plan, PlanStep
 
 
 class BrowserHandshakeTests(unittest.TestCase):
     def test_version_handshake_phase6(self):
-        with patch.object(browser_mod, 'request', return_value={'version': 'phase6-v1', 'message': 'Hyprash extension ready'}):
+        with patch.object(browser_mod, 'request', return_value={'version': 'phase6-v1', 'message': 'BLoK extension ready'}):
             status = ping()
             self.assertTrue(status['connected'])
             self.assertEqual(status['version'], 'phase6-v1')

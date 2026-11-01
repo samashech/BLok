@@ -1,0 +1,4 @@
+description = "Pick a color from the screen"
+phrases = ["pick a color", "color picker", "pick [a] colour", "what color is this"]
+run = "hyprpicker --autocopy --no-fancy & disown"
+reply = "Click a pixel; its color is copied"

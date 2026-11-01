@@ -3,7 +3,7 @@ import json,subprocess,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parent.parent
 
-def call(*args):return subprocess.check_output([str(ROOT/'hyprash.sh'),*args],text=True)
+def call(*args):return subprocess.check_output([str(ROOT/'blok.sh'),*args],text=True)
 try:
     call('ptt-start')
     deadline=time.monotonic()+5
@@ -20,6 +20,6 @@ try:
         if state['class']=='idle':break
         time.sleep(.1)
     assert state['class']=='idle',state
-    assert not Path('/run/user/1000/hyprash-key-held').exists()
+    assert not Path('/run/user/1000/blok-key-held').exists()
     print('PASS: press records; release finishes; cancellation leaves Voxtype idle and no held-key marker')
 finally:call('hide')

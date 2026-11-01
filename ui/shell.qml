@@ -7,7 +7,7 @@ import Quickshell.Wayland
 
 ShellRoot {
     id: root
-    property string base: Quickshell.env("HYPRASH_ROOT")
+    property string base: Quickshell.env("BLOK_ROOT")
     property string state: "ready"
     property string message: "Ready when you are"
     property string transcript: ""
@@ -23,7 +23,7 @@ ShellRoot {
     property string engine: "Laya · starting"
     property int inferenceMs: 0
     property var lastExecution: ({})
-    property bool reducedMotion: Quickshell.env("HYPRASH_REDUCED_MOTION") === "1"
+    property bool reducedMotion: Quickshell.env("BLOK_REDUCED_MOTION") === "1"
     property var timelineSteps: []
     property string timelinePlanId: ""
     property string timelineStatus: "idle"
@@ -43,7 +43,7 @@ ShellRoot {
 
     function send(data) { backend.write(JSON.stringify(data) + "\n") }
     function toggleMic() {
-        if (!backend.running) { state = "error"; message = "Backend unavailable. Restart Hyprash."; return }
+        if (!backend.running) { state = "error"; message = "Backend unavailable. Restart BLoK."; return }
         if (listening) send({command: "finish"})
         else if (busy) send({command: "stop"})
         else { transcript = ""; lastAction = ""; pendingApproval = null; timelineSteps = []; send({command: "listen"}) }
@@ -66,22 +66,22 @@ ShellRoot {
         }
         if (event.type === "approval_request") pendingApproval = event
         if (event.type === "approval_resolved") pendingApproval = null
-        if (event.type === "ui_control") { let result = event.window === "Hyprash · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
+        if (event.type === "ui_control") { let result = event.window === "BLoK · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)
         if (event.type === "camera") { camera.visible = true; if (event.capture) camera.takePhoto() }
     }
     Process {
         id: backend
-        command: [root.base + "/.venv/bin/python", "-m", "hyprash.backend"]
+        command: [Quickshell.env("BLOK_PYTHON") || (root.base + "/.venv/bin/python"), "-m", "blok.backend"]
         workingDirectory: root.base
         running: true
         stdinEnabled: true
         stdout: SplitParser { onRead: data => { try { root.handle(JSON.parse(data)) } catch (e) { console.warn(e) } } }
         stderr: SplitParser { onRead: data => console.warn(data) }
-        onExited: (code, status) => { root.state = "error"; root.message = "Voice service stopped. Restart Hyprash." }
+        onExited: (code, status) => { root.state = "error"; root.message = "Voice service stopped. Restart BLoK." }
     }
     IpcHandler {
-        target: "hyprash"
+        target: "blok"
         function toggle(): void {
             if (root.opened && (root.listening || root.busy)) root.toggleMic()
             else { root.opened = true; if (!root.listening) root.toggleMic() }
@@ -115,7 +115,7 @@ ShellRoot {
         margins.top: 0
         exclusionMode: ExclusionMode.Ignore
         color: "transparent"
-        WlrLayershell.namespace: "hyprash"
+        WlrLayershell.namespace: "blok"
         WlrLayershell.layer: WlrLayer.Overlay
         WlrLayershell.keyboardFocus: (root.typing || root.hasApproval) ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
         LiquidSurface {
@@ -128,6 +128,10 @@ ShellRoot {
             reducedMotion: root.reducedMotion
             edge: root.actionError ? root.theme.error : root.busy ? root.theme.accent : root.theme.border
             cornerRadius: root.theme.radius
+            chamfer: root.theme.chamfer || 0
+            pixelFrame: !!root.theme.pixelFrame
+            innerEdge: root.theme.innerEdge || "transparent"
+            glow: root.theme.glow || "transparent"
             backgroundTop: root.theme.backgroundTop
             background: root.theme.background
             backgroundBottom: root.theme.backgroundBottom
@@ -150,8 +154,22 @@ ShellRoot {
                 spacing: 4
                 RowLayout {
                     Layout.fillWidth: true; spacing: 11
+                    ThemeOrnament {
+                        visible: !!root.theme.ring
+                        Layout.preferredWidth: 64; Layout.preferredHeight: 64
+                        kind: root.theme.ring || ""
+                        badge: root.theme.badge || ""
+                        assetBase: root.theme.assetBase || ""
+                        primary: root.theme.orb
+                        secondary: root.theme.orbSecondary || root.theme.orb
+                        mode: root.orbMode
+                        active: panel.visible && surface.reveal > 0.65
+                        reducedMotion: root.reducedMotion
+                        Accessible.name: "Assistant: " + root.headline
+                    }
                     ThinkingOrb {
                         id: orb
+                        visible: !root.theme.ring
                         Layout.preferredWidth: 64; Layout.preferredHeight: 64
                         tint: root.theme.orb
                         dark: root.theme.mode !== "light"
@@ -165,20 +183,20 @@ ShellRoot {
                         Layout.fillWidth: true; spacing: 4
                         RowLayout {
                             spacing: 6
-                            Rectangle { width: 4; height: 4; radius: 2; color: root.listening ? root.theme.success : root.theme.muted }
-                            Text { text: "HYPRASH  /  LAYA"; color: root.theme.muted; font.family: root.theme.font; font.pixelSize: 9; font.letterSpacing: 1.4 }
+                            Rectangle { width: 4; height: 4; radius: root.theme.pixelFrame ? 0 : 2; color: root.listening ? root.theme.success : (root.theme.dot || root.theme.muted) }
+                            Text { text: "BLOK  /  LAYA"; color: root.theme.muted; font.family: root.theme.font; font.pixelSize: 9; font.letterSpacing: 1.4 }
                         }
                         Text {
                             Layout.fillWidth: true
                             text: root.headline
-                            color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: root.theme.id === "omarchy" ? 15 : 17; font.weight: Font.Medium
+                            color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: (root.theme.id === "omarchy" || root.theme.ring) ? 15 : 17; font.weight: root.theme.pixelFrame ? Font.Bold : Font.Medium
                             elide: Text.ElideRight
                         }
                     }
                     ToolButton {
                         text: "▦"; font.pixelSize: 16
                         implicitWidth: 24; implicitHeight: 28; leftPadding: 0; rightPadding: 0
-                        palette.buttonText: root.theme.accent
+                        palette.buttonText: root.theme.iconColor || root.theme.accent
                         ToolTip.visible: root.opened && surface.reveal > 0.99 && (hovered)
                         ToolTip.text: "Theme: " + root.theme.name + ". Click for the next theme"
                         onClicked: root.send({command: "theme", name: "next"})
@@ -191,10 +209,54 @@ ShellRoot {
                         onClicked: { root.typing = !root.typing; if (root.typing) input.forceActiveFocus() }
                     }
                     Rectangle {
+                        id: micButton
                         Layout.preferredWidth: 32; Layout.preferredHeight: 32; radius: root.theme.controlRadius
                         color: micMouse.containsMouse ? root.theme.hover : root.theme.surface
-                        border.color: root.theme.border
+                        border.color: root.listening ? root.theme.success : (root.theme.micBorder || root.theme.border)
+                        border.width: root.theme.micIcon ? 1.5 : 1
                         Rectangle {
+                            // Themed glow; pulses while listening.
+                            visible: !!root.theme.micIcon
+                            anchors.fill: parent; anchors.margins: -3
+                            radius: root.theme.controlRadius + 3
+                            color: "transparent"; border.width: 3
+                            border.color: root.listening ? root.theme.success : (root.theme.micBorder || root.theme.accent)
+                            opacity: 0.3
+                            SequentialAnimation on opacity {
+                                running: root.listening && !root.reducedMotion; loops: Animation.Infinite
+                                NumberAnimation { to: 0.7; duration: 600 } NumberAnimation { to: 0.2; duration: 600 }
+                            }
+                        }
+                        Image {
+                            id: micImage
+                            readonly property bool known: /\.(png|svg|webp|jpe?g)$/i.test(root.theme.micIcon || "")
+                            visible: known && !(root.busy && !root.listening)
+                            anchors.centerIn: parent
+                            width: 18; height: 18; fillMode: Image.PreserveAspectFit; smooth: true
+                            source: known ? root.theme.assetBase + root.theme.micIcon : ""
+                        }
+                        PixelIcon {
+                            id: micSprite
+                            readonly property bool known: sprites[root.theme.micIcon || ""] !== undefined
+                            visible: known && !(root.busy && !root.listening)
+                            anchors.centerIn: parent
+                            sprite: root.theme.micIcon || ""
+                            cell: 2
+                            scale: root.listening ? 1.12 : 1
+                            Behavior on scale { NumberAnimation { duration: 180 } }
+                        }
+                        Text {
+                            visible: !!root.theme.micIcon && ((!micSprite.known && !micImage.known) || (root.busy && !root.listening))
+                            anchors.centerIn: parent
+                            text: root.busy && !root.listening ? "■" : (root.theme.micIcon || "")
+                            color: root.theme.foreground
+                            font.family: root.busy && !root.listening ? root.theme.font : "Noto Color Emoji"
+                            font.pixelSize: root.busy && !root.listening ? 11 : 17
+                            scale: root.listening ? 1.12 : 1
+                            Behavior on scale { NumberAnimation { duration: 180 } }
+                        }
+                        Rectangle {
+                            visible: !root.theme.micIcon
                             anchors.centerIn: parent
                             width: root.listening || root.busy ? 9 : 7
                             height: root.listening || root.busy ? 9 : 12
@@ -202,10 +264,10 @@ ShellRoot {
                             color: root.listening ? root.theme.success : root.theme.foreground
                         }
                         Accessible.role: Accessible.Button
-                        Accessible.name: root.listening ? "Finish recording and run command" : root.busy ? "Cancel pending actions" : "Start Voxtype recording"
+                        Accessible.name: root.listening ? "Finish recording and run command" : root.busy ? "Cancel pending actions" : "Start recording"
                         MouseArea { id: micMouse; anchors.fill: parent; hoverEnabled: true; onClicked: root.toggleMic() }
                         ToolTip.visible: root.opened && surface.reveal > 0.99 && (micMouse.containsMouse)
-                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Ctrl+." : "Cancel") : "Record with Voxtype · Ctrl+."
+                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Ctrl+." : "Cancel") : "Record · Ctrl+."
                     }
                     ToolButton {
                         text: "×"; font.family: root.theme.font; font.pixelSize: 19; implicitWidth: 20; implicitHeight: 28; leftPadding: 0; rightPadding: 0
@@ -218,7 +280,7 @@ ShellRoot {
                     visible: root.expanded
                     Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 8
                     Layout.preferredHeight: 38
-                    text: root.transcript || (root.listening ? "Speak, then click mic to run · Voxtype" : root.message)
+                    text: root.transcript || (root.listening ? "Speak, then click mic to run · Whisper" : root.message)
                     color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: 13
                     wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                 }

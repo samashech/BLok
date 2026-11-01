@@ -1,0 +1,4 @@
+description = "Switch to the next wallpaper"
+phrases = ["next wallpaper", "change [the] wallpaper", "new wallpaper", "change [the] background", "next background"]
+run = "omarchy-theme-bg-next"
+reply = "New wallpaper"

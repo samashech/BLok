@@ -4,11 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 root=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(root))
-from hyprash.browser import request as browser_request, BrowserTaskError
+from blok.browser import request as browser_request, BrowserTaskError
 with tempfile.TemporaryDirectory() as tmp:
     process=subprocess.Popen(['/usr/bin/python',str(root/'scripts/browser_host.py')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,env={**os.environ,'XDG_RUNTIME_DIR':tmp})
     try:
-        path=Path(tmp)/'hyprash-browser.sock'
+        path=Path(tmp)/'blok-browser.sock'
         for _ in range(100):
             if path.exists():break
             time.sleep(.02)

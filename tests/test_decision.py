@@ -1,10 +1,10 @@
 import json
 import unittest
 from unittest.mock import patch, Mock
-from hyprash.decision import LayaDecision, Decision
-from hyprash.backend import Backend
-from hyprash.commands import Action
-from hyprash.plans import Plan
+from blok.decision import LayaDecision, Decision
+from blok.backend import Backend
+from blok.commands import Action
+from blok.plans import Plan
 
 class DecisionTests(unittest.TestCase):
     def engine(self,choice,probabilities):

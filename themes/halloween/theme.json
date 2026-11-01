@@ -1,0 +1,10 @@
+{
+  "id": "halloween", "name": "Halloween", "followDesktop": false,
+  "radius": 0, "controlRadius": 2, "chamfer": 10, "font": "JetBrainsMono Nerd Font", "mode": "dark",
+  "background": "#140d08", "backgroundTop": "#1a110a", "backgroundBottom": "#100a06",
+  "foreground": "#eadbc6", "muted": "#9b8068", "accent": "#c8742c",
+  "border": "#6b4426", "surface": "#1f150d", "hover": "#2b1d12",
+  "success": "#d9893a", "error": "#d8573c", "orb": "#c8742c", "orbSecondary": "#c8742c",
+  "ring": "arc", "badge": "pumpkin", "micIcon": "pumpkin",
+  "dot": "#c8742c", "iconColor": "#9b8068", "micBorder": "#6b4426"
+}

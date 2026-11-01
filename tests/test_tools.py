@@ -5,10 +5,10 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-from hyprash import files, router, system
-from hyprash.backend import Backend
-from hyprash.nlu import resolve_intent
-from hyprash.plans import proposals
+from blok import files, router, system
+from blok.backend import Backend
+from blok.nlu import resolve_intent
+from blok.plans import proposals
 
 
 class SandboxHome(unittest.TestCase):
@@ -73,7 +73,7 @@ class FileToolTests(SandboxHome):
         def fake_trash(args, **_):
             Path(args[2]).unlink()
             return Mock(returncode=0, stderr='')
-        with patch('hyprash.files.subprocess.run', side_effect=fake_trash) as run:
+        with patch('blok.files.subprocess.run', side_effect=fake_trash) as run:
             files.trash(target)
         self.assertEqual(run.call_args[0][0][:2], ['gio', 'trash'])
 
@@ -98,7 +98,7 @@ class BackendToolTests(SandboxHome):
 
     def test_find_then_open_it(self):
         self.backend.run_tool({'tool': 'file_find', 'query': 'todo'})
-        with patch('hyprash.files.subprocess.Popen') as popen:
+        with patch('blok.files.subprocess.Popen') as popen:
             self.backend.run_tool({'tool': 'file_pick', 'index': 1})
         self.assertEqual(popen.call_args[0][0], ['xdg-open', str(self.home / 'Documents' / 'todo.txt')])
 
@@ -181,21 +181,21 @@ class SystemTests(unittest.TestCase):
         self.assertEqual(calls[-1], ['hyprctl', 'dispatch', 'hl.dsp.window.close()'])
 
     def test_answer_battery_without_battery(self):
-        with patch('hyprash.system.Path.glob', return_value=[]):
+        with patch('blok.system.Path.glob', return_value=[]):
             self.assertIn('No battery', system.answer('battery'))
 
 
 
 class VoiceTests(unittest.TestCase):
     def test_spoken_form_is_friendly(self):
-        from hyprash.voice import spoken
+        from blok.voice import spoken
         self.assertEqual(spoken('Opened ~/Downloads'), 'Opened your Downloads folder')
         self.assertEqual(spoken('Saved note · Hello'), 'Saved note, Hello')
         self.assertEqual(spoken('No installed app named "x".', error=True), 'No installed app named "x".')
         self.assertEqual(spoken('Browser task timed out', error=True), 'Sorry, browser task timed out')
 
     def test_mode_prefers_elevenlabs_only_with_a_key(self):
-        from hyprash import voice
+        from blok import voice
         speaker = voice.Speaker()
         with patch.dict(os.environ, {'ELEVENLABS_API_KEY': ''}), patch.object(voice, 'KEY_FILE', Path('/nonexistent/key')):
             with patch.object(voice, 'kokoro_available', return_value=True):
@@ -204,11 +204,11 @@ class VoiceTests(unittest.TestCase):
                 self.assertEqual(speaker.mode(), 'local')
         with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'k'}):
             self.assertEqual(speaker.mode(), 'elevenlabs')
-        with patch.dict(os.environ, {'HYPRASH_TTS': '0'}):
+        with patch.dict(os.environ, {'BLOK_TTS': '0'}):
             self.assertEqual(speaker.mode(), 'off')
 
     def test_elevenlabs_failure_falls_back_to_local_voice(self):
-        from hyprash import voice
+        from blok import voice
         notices = []
         speaker = voice.Speaker(on_notice=notices.append)
         with patch.object(voice.Speaker, '_elevenlabs', side_effect=RuntimeError('HTTP 401')), \
@@ -218,7 +218,7 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('HTTP 401', notices[0])
 
     def test_kokoro_failure_falls_back_to_espeak(self):
-        from hyprash import voice
+        from blok import voice
         notices = []
         speaker = voice.Speaker(on_notice=notices.append)
         with patch.object(voice.Speaker, '_kokoro', side_effect=RuntimeError('model missing')), \
@@ -228,13 +228,13 @@ class VoiceTests(unittest.TestCase):
         self.assertIn('Kokoro', notices[0])
 
     def test_kokoro_plays_synthesised_wav(self):
-        from hyprash import voice
+        from blok import voice
         import numpy
         engine = Mock(); engine.create.return_value = (numpy.zeros(2400, dtype='float32'), 24000)
         player = Mock(); player.wait.return_value = 0
         with patch.object(voice, 'kokoro', return_value=engine), \
-             patch('hyprash.voice.subprocess.Popen', return_value=player) as popen, \
-             patch('hyprash.voice.shutil.which', return_value='/usr/bin/pw-play'):
+             patch('blok.voice.subprocess.Popen', return_value=player) as popen, \
+             patch('blok.voice.shutil.which', return_value='/usr/bin/pw-play'):
             speaker = voice.Speaker()
             speaker._kokoro('Opened Spotify', speaker.generation)
         self.assertEqual(engine.create.call_args[0][0], 'Opened Spotify')
@@ -242,15 +242,15 @@ class VoiceTests(unittest.TestCase):
         self.assertTrue(popen.call_args[0][0][1].endswith('.wav'))
 
     def test_elevenlabs_streams_audio_to_player(self):
-        from hyprash import voice
+        from blok import voice
         speaker = voice.Speaker()
         response = Mock(); response.read.side_effect = [b'ID3audio', b'']
         response.__enter__ = Mock(return_value=response); response.__exit__ = Mock(return_value=False)
         player = Mock(); player.poll.return_value = None
         with patch.dict(os.environ, {'ELEVENLABS_API_KEY': 'secret'}), \
-             patch('hyprash.voice.urllib.request.urlopen', return_value=response) as urlopen, \
-             patch('hyprash.voice.subprocess.Popen', return_value=player), \
-             patch('hyprash.voice.shutil.which', return_value='/usr/bin/mpv'):
+             patch('blok.voice.urllib.request.urlopen', return_value=response) as urlopen, \
+             patch('blok.voice.subprocess.Popen', return_value=player), \
+             patch('blok.voice.shutil.which', return_value='/usr/bin/mpv'):
             speaker._elevenlabs('Opened Spotify', speaker.generation)
         request = urlopen.call_args[0][0]
         self.assertEqual(request.get_header('Xi-api-key'), 'secret')

@@ -8,7 +8,7 @@ import subprocess
 import time
 
 root=Path(__file__).resolve().parent.parent
-process=subprocess.Popen([str(root/'.venv/bin/python'),'-m','hyprash.backend'],cwd=root,
+process=subprocess.Popen([str(root/'.venv/bin/python'),'-m','blok.backend'],cwd=root,
                          stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,bufsize=1)
 def send(command):
     process.stdin.write(json.dumps({'command':command})+'\n'); process.stdin.flush()

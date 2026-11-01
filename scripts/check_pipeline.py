@@ -9,9 +9,9 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
-with tempfile.TemporaryDirectory(prefix='hyprash-pipeline-') as data:
-    env = dict(os.environ, HYPRASH_DATA=data)
-    process = subprocess.Popen([str(ROOT/'.venv/bin/python'), '-m', 'hyprash.backend'],
+with tempfile.TemporaryDirectory(prefix='blok-pipeline-') as data:
+    env = dict(os.environ, BLOK_DATA=data)
+    process = subprocess.Popen([str(ROOT/'.venv/bin/python'), '-m', 'blok.backend'],
         cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
     events = queue.Queue()
     def reader():
@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='hyprash-pipeline-') as data:
         raise AssertionError('Timed out waiting for event')
     try:
         wait(lambda e: e.get('type')=='engine' and 'offline' in e.get('message',''))
-        send('text',text='open hyprash notes and create a note titled hello')
+        send('text',text='open blok notes and create a note titled hello')
         note=wait(lambda e: e.get('type')=='note' and e.get('title')=='hello')
         wait(lambda e: e.get('type')=='activity' and e.get('state')=='idle')
         send('text',text='write this is a local note')
