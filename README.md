@@ -114,6 +114,20 @@ Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for it
 
 It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers and page reading need the browser extension updated to `phase10`: reload it in `brave://extensions`, then reload open pages.
 
+## Let AI apps use your desktop (MCP)
+
+BLoK is also an [MCP](https://modelcontextprotocol.io) server, so Claude and other AI apps can drive your Hyprland desktop through BLoK's safety layer.
+
+```sh
+claude mcp add blok -- blok mcp          # Claude Code
+```
+
+For Claude Desktop or any other MCP client, add a server whose command is `blok mcp` (stdio). BLoK must be running.
+
+It offers 23 tools: `blok_command` (any plain-English command, as you'd say it), window and layout control, focus mode, file find/read/append/create, browser open/search/read/click, typing, volume, brightness, media and `say`.
+
+**You stay in control:** anything that changes things or hands your data to the AI (reading files, pages or the screen, typing, clicking, writing files, restoring layouts, running a command) shows BLoK's approval card on your screen, naming the app and what it wants to do. Only you can approve, by voice, Enter or a click; the AI app has no way to. Opening sites, searching, arranging windows, volume and brightness run without asking. Tool calls go through a socket only your user can open (`$XDG_RUNTIME_DIR/blok.sock`).
+
 ## Make it yours
 
 ### Add a command in 30 seconds

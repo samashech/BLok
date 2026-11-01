@@ -73,6 +73,9 @@ class Backend:
             return
         with self.output_lock:
             print(json.dumps(event), flush=True)
+        captured = getattr(self.worker_context, "capture", None)
+        if captured is not None and event.get("type") == "action":
+            captured.append(event)
         # Talk back: every user-facing result is spoken, except per-step
         # messages inside a plan, which are summarised once at the end.
         if event.get("type") == "action" and getattr(self.worker_context, "in_plan", False):
@@ -115,6 +118,8 @@ class Backend:
         return self.wait_for_approval(approval_id, timeout=30.0)
 
     def confirm(self, reason: str, **details):
+        if getattr(self.worker_context, "pre_approved", False):
+            return  # the user already approved this whole AI request
         if not self.request_approval(reason, **details):
             raise RuntimeError("Not done: " + reason.rstrip("?") + " was rejected or timed out.")
 
@@ -275,6 +280,41 @@ class Backend:
             status=status,
             steps=[dict(s) for s in timeline_steps],
         )
+
+    def run_action(self, action):
+        """Run one action in this thread and return its result text (for AI clients over MCP)."""
+        self.worker_context.capture = []
+        try:
+            ok = self.execute_plan(action) if isinstance(action, Plan) else self.execute(action)
+            events = list(self.worker_context.capture)
+        finally:
+            self.worker_context.capture = None
+        if not ok:
+            errors = [e.get("message", "") for e in events if e.get("error")]
+            raise RuntimeError(errors[0] if errors else 'That did not work.')
+        return '; '.join(e.get("message", "") for e in events if e.get("message")) or 'Done.'
+
+    def run_spoken(self, text):
+        """A plain-English (or Hinglish) command through the full voice pipeline, synchronously."""
+        from blok import hinglish
+        text = hinglish.translate(text) or text
+        intent = resolve_intent(text, self.context)
+        if intent.intent_type in ("cancel", "unsupported", "empty") or intent.requires_clarification:
+            return intent.ambiguity_reason or "Nothing to do."
+        try:
+            candidates = proposals(text, self.context)
+        except ValueError as error:
+            return str(error)
+        if all(action is not None for _, action in candidates) and intent.confidence >= 0.90:
+            plan = Plan(tuple(action for _, action in candidates))
+        else:
+            if self.laya is None:
+                self.laya = LayaDecision()
+            decision = self.laya.plan(text, self.context)
+            if decision.action is None:
+                return decision.reason
+            plan = decision.action
+        return self.run_action(plan)
 
     def say_result(self, message, error=False):
         """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
@@ -1294,6 +1334,9 @@ class Backend:
         self.speaker.enabled = True
         self.speaker.warm_up()
         self.live = True
+        from blok.mcp_bridge import Bridge
+        self.bridge = Bridge(self)
+        self.bridge.start()
         try:
             if json.loads((DATA / 'settings.json').read_text()).get('hands_free'):
                 self.set_hands_free(True, persist=False)
@@ -1365,6 +1408,8 @@ class Backend:
             self.stop()
             if self.hands_free is not None:
                 self.hands_free.stop()
+            if getattr(self, 'bridge', None):
+                self.bridge.stop()
 
 if __name__ == "__main__":
     backend = Backend()
