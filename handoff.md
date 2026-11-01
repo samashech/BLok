@@ -79,12 +79,22 @@ hyprash/
 │   ├── backend.py             Main orchestration and event loop
 │   ├── speech.py              Voxtype transcription integration
 │   ├── decision.py            Local Laya decision gate
+│   ├── router.py              Tool rules + two-stage Laya routing and slot extraction
+│   ├── files.py               Home-folder file tools (find/open/read/append/create/rename/move/copy/trash)
+│   ├── system.py              Volume, brightness, media, windows, lock, answers, spoken replies
+│   ├── llm_parser.py          Optional Gemma/Ollama compiler (not wired into the runtime)
 │   ├── commands.py            Command normalization and routing
+│   ├── nlu.py                 Disfluency repair, slang normalization, context
 │   ├── workflows.py           Known browser/desktop workflows
-│   ├── plans.py               Multi-step plan validation/execution
+│   ├── plans.py               Multi-step plan validation/execution & DAG engine
+│   ├── routines.py            Reusable routine catalog and execution
+│   ├── recording.py           SessionActionRecorder & routine auto-recording
 │   ├── browser.py             Browser bridge client
 │   ├── desktop.py             Desktop control layer
 │   └── themes.py              Theme loading
+│
+├── vendor/                    Vendored open-source components
+│   └── browser-use-dom/       browser-use interactive element indexing engine
 │
 ├── ui/                        Quickshell/QML interface
 │   ├── shell.qml              Main assistant overlay
@@ -330,13 +340,14 @@ Phase 6 upgrades Hyprash to handle conversational natural language, enforces an 
   ```
 - Benchmarks show warm median total latency of **~15 ms** for Tier 1 deterministic commands.
 
-### 8. Full Phase 6 Test Matrix (183 Python tests, 14 Node tests)
-- `.venv/bin/python -m unittest discover -s tests`: **183 tests pass in ~0.13s** (100% green).
-  - `tests/test_conversational_nlu.py`: 41 tests for slang, fillers, disfluencies, compound commands.
-  - `tests/test_multistep_dag.py`: 7 tests for DAG isolation, tab-ID propagation, risk assessment.
-  - `tests/test_simular_features.py`: 11 tests for timeline updates, HITL approval, routine recording.
+### 8. Full Phase 6 Test Matrix (213 Python tests, 14 Node tests)
+- `.venv/bin/python -m unittest discover -s tests`: **213 tests pass in ~0.35s** (100% green).
+  - `tests/test_conversational_nlu.py`: 46 tests for slang, fillers, disfluencies, compound commands, and Gemma 2B fastpath/fallback/schema compilation.
+  - `tests/test_multistep_dag.py`: 10 tests for DAG isolation, runtime tab-ID propagation, risk assessment, two-turn tab-ID continuity, and YouTube/Spotify subtask isolation.
+  - `tests/test_agent_features.py`: 22 tests for timeline updates, HITL approval (granted/rejected/voice), routine precondition inference, ring buffer, and voice-driven routine recording.
+  - `tests/test_simular_features.py`: 11 tests for baseline Simular feature contracts.
   - Prior suites (`test_nlu.py`, `test_browser_reliability.py`, `test_routines.py`, `test_plans.py`, `test_decision.py`): 124 regression tests pass.
-- `node tests/browser_controls.mjs`, `node tests/browser_workflows.mjs`, `node --test tests/execution.mjs`, `node --test tests/test_orbs.mjs`: All 14 tests pass.
+- `node tests/browser_controls.mjs`, `node tests/browser_workflows.mjs`, `node --test tests/execution.mjs`, `node --test tests/test_orbs.mjs`: All 14 tests pass (12 unit tests + 7 browser workflows).
 - `qmllint ui/ActionTimeline.qml`: 0 errors.
 - `./hyprash.sh status`: Active and responding on live Wayland desktop.
 
@@ -351,6 +362,33 @@ To update the live Brave session to `phase6-v1`:
    ```
    It will report `{'connected': True, 'version': 'phase6-v1', ...}`.
 *Note: Due to our backward-compatible version handshake, existing sessions reporting earlier versions continue to operate safely without errors.*
+
+## Phase 7: desktop tools and Laya routing
+
+Phase 7 turns Hyprash from a fixed command list into a desktop assistant while keeping Laya as the only model.
+
+| Phase | Problem | Fix |
+|---|---|---|
+| 7.1 Runtime & input | Voxtype daemon stopped → every Ctrl+. failed; `--clipboard` replaced the clipboard; all text lowercased; Laya plans lost tab context | Clear "start Voxtype" error; `--file` output mode only (this Voxtype rejects `--file` with `--clipboard`, which had broken every recording); casing kept end-to-end; `LayaDecision.plan(text, context)`; `HYPRASH_VOXTYPE_MODEL` override |
+| 7.2 Parser | "search youtube for X" went to Google; "find X" was always a web search; unknown clauses rejected the whole command; Gemma fallback unreachable | YouTube "for" form; file-aware `find`; unknown clauses go to Laya; dead fallback removed from `plans.proposals` |
+| 7.3 Laya router | Laya only rubber-stamped regex output (label vs "Do nothing") | `hyprash/router.py`: area → action routing over the top two areas, Python slot extraction, clarifying questions, approval for unsure state changes; Laya also picks among file and link candidates |
+| 7.4 Files | No file access; delete/rename/move/copy/download hard-blocked | `hyprash/files.py`, confined to `$HOME`, no hidden-path writes, no overwrites, trash instead of delete, approval cards naming the exact path |
+| 7.5 System | No volume/brightness/media/window/lock/questions; no spoken output | `hyprash/system.py` via Omarchy commands and `hl.dsp.window.*` Lua dispatchers; `espeak-ng` replies (`HYPRASH_TTS=0` mutes) |
+| 7.6 Downloads | Extension had no download path | Extension `phase7-v1`: `links`, `download`, `click_download` with `chrome.downloads` verification; backend search → Laya page pick → Laya link pick → approval |
+
+Measured on this machine: rule path <2 ms; Laya routing 250–400 ms (two to three choice questions); file search over `$HOME` ≤25 ms with `fd`. 238 Python tests and all Node/Playwright suites pass.
+
+Manual steps still required: `systemctl --user enable --now voxtype`, and reload the unpacked extension in `brave://extensions` (it asks for the new `downloads` permission).
+
+## Phase 8: everyday speech, voice replies, seasonal themes
+
+- **Recording fix:** Voxtype refuses `--file` together with `--clipboard`; every Hyprash recording failed at start. `--file` alone neither types nor uses the clipboard.
+- **Everyday speech:** `nlu.tidy_speech()` strips hesitations, stutters, vague tails and openers and expands slang before any rule runs. New rules handle “look up <site>” (open it), “watch/see … on YouTube”, “listen to …”, “check my mail”, broad battery/volume phrasing and “open this app” (clarify). Compound requests split on many more verbs.
+- **Optional Ollama rephraser** (`hyprash/rephrase.py`): uses an installed model (prefers `qwen2.5:3b`, then `gemma2:2b`; never pulls). Only for utterances the rules can't resolve; the rewrite is re-planned by rules and Laya, and rewrites naming things not said are discarded. ~200–400 ms here.
+- **Voice** (`hyprash/voice.py`): local Kokoro-82M via `kokoro-onnx` by default (`scripts/download_kokoro.py`, `af_heart`, ~0.4–0.9 s per reply on CPU, played with `pw-play`); ElevenLabs streaming when a key exists; espeak-ng fallback; results spoken, plans summarised; speech stops when listening starts.
+- **Themes:** `themes/halloween.json`, `themes/diwali.json`; ▦ cycles all themes; voice “make it spooky” / “Diwali mode”.
+
+261 Python tests pass.
 
 ## Product boundary and risks
 

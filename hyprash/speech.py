@@ -38,13 +38,19 @@ class VoxtypeSession:
 
     def start(self):
         status = json.loads(self.run('status', '--format', 'json', '--extended'))
+        if status.get('class') == 'stopped':
+            raise RuntimeError('Voxtype is not running. Start it once with: systemctl --user enable --now voxtype')
         if status.get('class') != 'idle':
-            raise RuntimeError('Voxtype is busy or stopped. Finish your F9 dictation first, or start Voxtype.')
+            raise RuntimeError('Voxtype is busy. Finish your F9 dictation first.')
         self.model = status.get('model', self.model)
         self.directory = tempfile.TemporaryDirectory(prefix='hyprash-voice-', dir=os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
         self.path = Path(self.directory.name)/'transcript.txt'
+        model = os.environ.get('HYPRASH_VOXTYPE_MODEL')
         try:
-            self.run('record', 'start', '--file='+str(self.path), '--clipboard', '--no-auto-submit', '--no-smart-auto-submit', '--no-osd')
+            # `--file` is Voxtype's file output mode: it neither types into the
+            # focused window nor touches the clipboard (and rejects `--clipboard`).
+            self.run('record', 'start', '--file='+str(self.path), '--no-auto-submit', '--no-smart-auto-submit', '--no-osd',
+                     *(['--model', model] if model else []))
             self.owned = True
             for _ in range(30):
                 if self.state() == 'recording':

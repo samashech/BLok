@@ -6,7 +6,14 @@ import re
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
-THEMES = ('omarchy', 'liquid')
+# Cycle order for the ▦ button; any other theme file in themes/ is appended.
+ORDER = ('omarchy', 'liquid', 'halloween', 'diwali')
+
+def available():
+    found = {p.stem for p in (ROOT/'themes').glob('*.json')}
+    return tuple(t for t in ORDER if t in found) + tuple(sorted(found - set(ORDER)))
+
+THEMES = available()
 
 def desktop_palette():
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home()/'.local/state'))
@@ -31,7 +38,9 @@ class ThemeStore:
         self.last=None
 
     def select(self,name):
-        if name not in THEMES: raise ValueError('Choose the omarchy or liquid theme')
+        if name == 'next':
+            name=THEMES[(THEMES.index(self.selected)+1)%len(THEMES)] if self.selected in THEMES else THEMES[0]
+        if name not in THEMES: raise ValueError('Choose one of these themes: '+', '.join(THEMES))
         settings={}
         try:
             settings=json.loads(self.path.read_text())

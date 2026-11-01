@@ -56,6 +56,12 @@ class Backend:
         self.approval_results = {}
         self.active_plan_id = None
         self.last_executed_plan = None
+        self.laya = None
+        from hyprash.voice import Speaker
+        # Silent until main() runs, so tests and scripts never talk.
+        self.speaker = Speaker(DATA / 'settings.json', on_notice=lambda message: self.emit(type="engine", message=message), enabled=False)
+        # Session-only file candidates for "open it" / "open file 2" follow-ups.
+        self.file_candidates = (0.0, [])
 
     def emit(self, **event):
         generation=getattr(self.worker_context,"generation",None)
@@ -63,6 +69,13 @@ class Backend:
             return
         with self.output_lock:
             print(json.dumps(event), flush=True)
+        # Talk back: every user-facing result is spoken, except per-step
+        # messages inside a plan, which are summarised once at the end.
+        if event.get("type") == "action" and getattr(self.worker_context, "in_plan", False):
+            self.plan_messages.append(event.get("message", ""))
+        elif event.get("type") == "action" and event.get("message"):
+            from hyprash.voice import spoken
+            self.speaker.say(spoken(event["message"], error=bool(event.get("error"))))
 
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
@@ -84,6 +97,19 @@ class Backend:
         self.approval_events.pop(approval_id, None)
         self.approval_results.pop(approval_id, None)
         return result
+
+    def request_approval(self, reason: str, **details) -> bool:
+        """Show an approval card and block this worker until approve, reject or 30 s timeout."""
+        approval_id = str(uuid.uuid4())
+        self.approval_events[approval_id] = threading.Event()
+        self.approval_results[approval_id] = False
+        self.emit(type="approval_request", approval_id=approval_id, reason=reason, **details)
+        self.emit(type="activity", state="awaiting_approval", message="Approval needed: " + reason)
+        return self.wait_for_approval(approval_id, timeout=30.0)
+
+    def confirm(self, reason: str, **details):
+        if not self.request_approval(reason, **details):
+            raise RuntimeError("Not done: " + reason.rstrip("?") + " was rejected or timed out.")
 
     def resolve_approval(self, approval_id: str, approved: bool):
         if not approval_id:
@@ -112,6 +138,7 @@ class Backend:
         self.approval_results.clear()
 
     def stop(self):
+        self.speaker.stop()
         self.listening = False
         self.generation += 1
         if self.actions_pending:
@@ -230,6 +257,9 @@ class Backend:
         if action.kind == 'web_task':
             from hyprash.workflows import task_label
             return task_label(json.loads(action.value))
+        if action.kind == 'tool':
+            from hyprash.router import label
+            return label(json.loads(action.value))
         if action.kind == 'routine':
             from hyprash.routines import get_routine
             routine = get_routine(action.value, DATA)
@@ -256,6 +286,20 @@ class Backend:
         )
 
     def execute_plan(self, plan):
+        self.worker_context.in_plan = True
+        self.plan_messages = []
+        try:
+            ok = self._execute_plan(plan)
+        finally:
+            self.worker_context.in_plan = False
+        from hyprash.voice import spoken
+        said = [m for m in self.plan_messages if m]
+        if said:
+            summary = said[-1] if not ok else (', then '.join(said[-2:]) if len(said) > 1 else said[0])
+            self.speaker.say(spoken(summary, error=not ok))
+        return ok
+
+    def _execute_plan(self, plan):
         from hyprash.plans import PlanExecutionReport
         generation = getattr(self.worker_context, "generation", self.generation)
         total = len(plan.steps)
@@ -324,24 +368,11 @@ class Backend:
             if getattr(action, 'requires_approval', False):
                 current_step_item["status"] = "awaiting_approval"
                 self.emit_timeline(plan_id, "awaiting_approval", timeline_steps)
-                approval_id = str(uuid.uuid4())
-                self.approval_events[approval_id] = threading.Event()
-                self.approval_results[approval_id] = False
-                self.emit(
-                    type="approval_request",
-                    approval_id=approval_id,
-                    plan_id=plan_id,
-                    step_id=sid,
-                    action=action.kind,
-                    value=action.value,
+                approved = self.request_approval(
+                    getattr(action, "approval_reason", "") or "Sensitive action requires approval",
+                    action=action.kind, value=action.value, plan_id=plan_id, step_id=sid,
                     risk_level=getattr(action, "risk_level", "SENSITIVE_DESTRUCTIVE"),
-                    reason=getattr(action, "approval_reason", "Sensitive action requires approval"),
-                    domain=getattr(action, "target_domain", "general"),
-                )
-                self.emit(type="activity", state="awaiting_approval",
-                          message=f"Approval needed: {getattr(action, 'approval_reason', self.step_label(action))}")
-
-                approved = self.wait_for_approval(approval_id, timeout=30.0)
+                    domain=getattr(action, "target_domain", "general"))
                 if not approved:
                     failed_step_ids.add(sid)
                     current_step_item["status"] = "failed"
@@ -437,6 +468,8 @@ class Backend:
                 if getattr(action, "target_tab_id", None):
                     task_data["target_tab_id"] = action.target_tab_id
                 message=self.browser_task(task_data)
+            elif kind == "tool":
+                message=self.run_tool(json.loads(value))
             elif kind == "obsidian_note":
                 title=desktop.create_obsidian_note(json.loads(value)['content'])
                 self.notes_target="obsidian"
@@ -559,6 +592,157 @@ class Backend:
             self.emit(type="action", error=True, message=str(error))
             return False
 
+    def remember_files(self, paths):
+        self.file_candidates = (time.monotonic(), list(paths))
+
+    def recent_file(self, index=1):
+        created, paths = self.file_candidates
+        if not paths or time.monotonic() - created > 300:
+            raise RuntimeError('No recent file list. Say "find <file>" first.')
+        if not 1 <= index <= len(paths):
+            raise RuntimeError(f'There are only {len(paths)} files in the last list.')
+        return paths[index - 1]
+
+    def resolve_path(self, query, kind=None, text_only=False):
+        """One concrete path for a spoken description; Laya picks among close matches."""
+        from hyprash import files
+        if re.fullmatch(r'(?:it|that|this|that file|this file|that one)', query.strip(), re.I):
+            return self.recent_file(1)
+        paths = files.find(query, kind=kind)
+        if text_only:
+            paths = [p for p in paths if p.suffix.lower() in files.TEXT_SUFFIXES]
+        if not paths:
+            raise files.FileError(f'No {"folder" if kind == "d" else "file"} in your home folder matches "{query}".')
+        winner = files.clear_winner(paths, query)
+        if winner:
+            return winner
+        options = {files.display(p): p for p in paths[:8]}
+        if self.laya is not None and self.laya.agent is not None:
+            choice, _ = self.laya.pick(query, list(options), 'Which of these files is the user talking about?', threshold=0.6)
+            if choice:
+                return options[choice]
+        self.remember_files(list(options.values()))
+        listing = '; '.join(f'{i}) {name}' for i, name in enumerate(options, 1))
+        raise files.FileError(f'Several match: {listing}. Say "open file 2", or use a fuller name.')
+
+    def run_tool(self, task):
+        from hyprash import files, system
+        name = task.get('tool')
+        if name == 'answer':
+            return system.answer(task['topic'])
+        if name == 'volume':
+            return system.volume(task['op'], task.get('level'))
+        if name == 'brightness':
+            return system.brightness(task['op'], task.get('level'))
+        if name == 'media':
+            return system.media(task['op'])
+        if name == 'lock':
+            return system.lock()
+        if name == 'theme':
+            self.themes.select(task.get('name', 'next'))
+            theme = self.themes.current()
+            self.emit(type="theme", theme=theme)
+            return theme['name'] + ' theme'
+        if name == 'window':
+            return system.window(task['op'], task.get('workspace'), task.get('app'))
+        if name == 'download':
+            return self.download(task)
+        if name == 'file_pick':
+            path = self.recent_file(int(task.get('index', 1)))
+            return files.open_path(path)
+        if name == 'file_find':
+            paths = files.find(task['query'])
+            if not paths:
+                raise files.FileError(f'Nothing in your home folder matches "{task["query"]}".')
+            self.remember_files(paths)
+            if len(paths) == 1 and paths[0].is_dir() and paths[0] in files.user_dirs().values():
+                return files.list_folder(paths[0])
+            if len(paths) == 1:
+                return f'Found {files.display(paths[0])}. Say "open it" to open it.'
+            listing = '; '.join(f'{i}) {files.display(p)}' for i, p in enumerate(paths[:5], 1))
+            return f'Found {len(paths)}: {listing}. Say "open file 2" to open one.'
+        if name == 'file_create':
+            folder = self.resolve_path(task['folder'], kind='d') if task.get('folder') else None
+            path = files.create_file(task['name'], folder, task.get('content', ''))
+            self.remember_files([path])
+            return 'Created ' + files.display(path)
+        path = self.resolve_path(task['query'], text_only=name == 'file_append')
+        self.remember_files([path])
+        if name == 'file_open':
+            return files.open_path(path)
+        if name == 'file_read':
+            return files.display(path) + ': ' + files.read_text(path)
+        if name == 'file_append':
+            return files.append_text(path, task['text'])
+        if name == 'file_rename':
+            self.confirm(f'Rename {files.display(path)} to {task["name"]}?', action='file_rename', value=str(path))
+            return files.rename(path, task['name'])
+        if name in ('file_move', 'file_copy'):
+            folder = self.resolve_path(task['dest'], kind='d')
+            verb = 'Copy' if name == 'file_copy' else 'Move'
+            self.confirm(f'{verb} {files.display(path)} to {files.display(folder)}?', action=name, value=str(path))
+            return files.move(path, folder, copy=name == 'file_copy')
+        if name == 'file_delete':
+            self.confirm(f'Move {files.display(path)} to the trash?', action=name, value=str(path))
+            return files.trash(path)
+        raise RuntimeError('Unsupported tool: ' + str(name))
+
+    def download(self, task):
+        """Search → open the chosen page → Laya picks the download link → approval → verified download."""
+        from urllib.parse import urlparse, quote_plus
+        progress = lambda event: self.emit(type="activity", state="executing", message=event['message']) if event.get('status') == 'running' else None
+        version = browser.ping().get('version')
+        if version != 'phase7-v1':
+            raise RuntimeError('Downloads need the updated browser extension: open brave://extensions and click Reload on Hyprash '
+                               f'(running: {version}).')
+        if task.get('url'):
+            url = task['url']
+            self.confirm(f'Download {url}?', action='download', value=url)
+            result = browser.request({'action': 'download', 'url': url}, on_progress=progress)
+            self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
+            return result['message']
+        query = task['query'].strip()
+        steam = re.search(r'\s+(?:on|from) steam$', query, re.I)
+        if steam:
+            query = query[:steam.start()]
+            browser.request({'action': 'navigate', 'url': 'https://store.steampowered.com/search/?term=' + quote_plus(query)}, on_progress=progress)
+            return f'Opened Steam store results for {query}. Pick the game and install it from Steam.'
+        if self.laya is None or self.laya.agent is None:
+            raise RuntimeError('Laya is still loading. Try the download again in a moment.')
+        try:
+            links = browser.request({'action': 'links', 'query': query, 'download': True}, on_progress=progress)
+        except browser.BrowserTaskError:
+            links = {}
+        # Only trust the current page when it is about the requested thing.
+        words = [w for w in re.findall(r'\w+', query.lower()) if len(w) > 2]
+        if not any(w in (links.get('title', '') + ' ' + links.get('url', '')).lower() for w in words):
+            links = {}
+        if not links.get('links'):
+            browser.request({'action': 'search', 'site': 'google', 'query': query + ' download'}, on_progress=progress)
+            results = browser.request({'action': 'links', 'results': True}, on_progress=progress).get('links', [])
+            if not results:
+                raise RuntimeError('Google showed no results to choose from.')
+            options = {f'{r["name"][:80]} — {urlparse(r["href"]).hostname}': r for r in results[:8]}
+            choice, _ = self.laya.pick(f'official download page for {query}', list(options),
+                                       f'Which search result is the official download page for {query}?', threshold=0.3)
+            chosen = options[choice] if choice else results[0]
+            browser.request({'action': 'navigate', 'url': chosen['href']}, on_progress=progress)
+            links = browser.request({'action': 'links', 'query': query, 'download': True}, on_progress=progress)
+        candidates = links.get('links', [])
+        if not candidates:
+            return f'Opened {links.get("url", "the page")}, but it shows no download link. Say "click <button name>" to continue.'
+        options = {f'{c["name"][:90]}' + (f' ({urlparse(c["href"]).hostname})' if c.get('href') else ''): c for c in candidates[:8]}
+        choice, _ = self.laya.pick(f'download {query}', list(options), f'Which link downloads {query}?', threshold=0.3)
+        if not choice:
+            listing = '; '.join(list(options)[:4])
+            return f'Not sure which link downloads {query}. Visible options: {listing}. Say "click <name>".'
+        link = options[choice]
+        host = urlparse(link.get('href') or links.get('url', '')).hostname or 'this page'
+        self.confirm(f'Download from {host}: "{link["name"][:80]}"?', action='download', value=link.get('href', ''))
+        result = browser.request({'action': 'click_download', 'control': link['control'], 'page': links['page']}, on_progress=progress)
+        self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
+        return result['message']
+
     def browser_task(self, task):
         action=task.get('action')
         if action == 'result':
@@ -606,15 +790,49 @@ class Backend:
         return any(action and action.kind=='web_task' and json.loads(action.value).get('action')=='result'
                    for _,action in candidates)
 
+    def plan_with_rephrase(self, model, generation, text, timer):
+        """Let a local Ollama model restate casual speech; the rewrite still goes through rules and Laya.
+
+        Returns a runnable decision from the rewrite, a decision carrying the model's
+        clarifying question when neither wording works, or None to plan `text` as said.
+        """
+        from hyprash import rephrase
+        rewrite = rephrase.rewrite(text)
+        if rewrite is None or generation != self.generation:
+            return None
+        if timer:
+            timer.record_stage('rephrase_ms', rewrite.elapsed_ms)
+        if rewrite.command and rewrite.command.lower() != text.lower().strip(' .!?'):
+            self.events.put((generation, {"type": "understood", "text": rewrite.command, "model": rewrite.model}))
+            try:
+                decision = model.plan(rewrite.command, self.context)
+            except ValueError:
+                decision = None
+            if decision is not None and decision.action is not None:
+                return decision
+        if rewrite.question:
+            try:
+                decision = model.plan(text, self.context)
+            except ValueError:
+                decision = None
+            if decision is not None and decision.action is not None:
+                return decision
+            from hyprash.decision import Decision
+            return Decision(None, 'clarify', 0.0, rewrite.elapsed_ms, rewrite.question)
+        return None
+
     def start_decisions(self):
         if self.decision_worker is not None:
             return
         def work():
             model = LayaDecision()
+            self.laya = model
             self.events.put((None, {"internal":"engine", "message":"Laya · loading locally"}))
             try:
                 model.load()
                 self.events.put((None, {"internal":"engine", "message":"Laya · local CPU · offline"}))
+                from hyprash import rephrase
+                rephrase.warm_up()
             except Exception as error:
                 self.events.put((None, {"internal":"engine", "message":"Laya unavailable: " + str(error)}))
             while True:
@@ -625,8 +843,9 @@ class Backend:
                 intent = item[3] if len(item) > 3 else None
                 if generation != self.generation: continue
                 try:
+                    decision = self.plan_with_rephrase(model, generation, text, timer)
                     t_inf = time.monotonic_ns()
-                    decision = model.plan(text)
+                    decision = decision or model.plan(text, self.context)
                     inf_ms = (time.monotonic_ns() - t_inf) / 1_000_000.0
                     if timer:
                         timer.record_stage('laya_inference_ms', inf_ms)
@@ -786,7 +1005,8 @@ class Backend:
                 approved = (intent.intent_type == "hitl_approve")
                 self.resolve_latest_approval(approved)
                 return
-        normalized = text.lower().replace("dot com", ".com").replace("dot org", ".org")
+        # Keep the speaker's casing: notes, file text and names are data.
+        normalized = re.sub(r"\s+dot\s+(com|org|net)\b", r".\1", text, flags=re.I)
         normalized = re.sub(r"\s+\.", ".", normalized)
         if normalized.strip():
             # A completed utterance has one plan. Validation happens before the
@@ -811,6 +1031,14 @@ class Backend:
         elif command == "theme":
             self.themes.select(str(request.get("name", "")))
             self.emit(type="theme", theme=self.themes.current())
+        elif command == "voice":
+            mode = str(request.get("mode", ""))
+            if mode not in ("elevenlabs", "kokoro", "local", "off"):
+                raise ValueError("Choose the kokoro, elevenlabs, local or off voice")
+            settings = json.loads((DATA / 'settings.json').read_text()) if (DATA / 'settings.json').exists() else {}
+            settings["voice"] = mode
+            (DATA / 'settings.json').write_text(json.dumps(settings, indent=2) + "\n")
+            self.emit(type="action", message=f"Voice: {self.speaker.mode()}")
         elif command == "save_routine":
             from hyprash.routines import save_routine_dict
             try:
@@ -828,6 +1056,8 @@ class Backend:
             self.emit(type="diagnostics", **get_diagnostics_summary())
 
     def main(self):
+        self.speaker.enabled = True
+        self.speaker.warm_up()
         def read_requests():
             for line in sys.stdin:
                 try: self.events.put((None, json.loads(line)))
@@ -860,6 +1090,9 @@ class Backend:
                     elif event["type"] == "action_done":
                         self.actions_pending=max(0,self.actions_pending-1)
                         self.emit(type="activity",state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
+                    elif event["type"] == "understood":
+                        self.emit(type="understood", text=event["text"], model=event["model"])
+                        self.emit(type="activity", state="thinking", message=f"Understood: “{event['text']}” · Laya is checking…")
                     elif event["type"] == "speech_busy":
                         self.listening = False
                         self.status("processing", "Transcribing with your Voxtype model…")

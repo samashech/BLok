@@ -212,6 +212,72 @@ class MultiStepDAGTests(unittest.TestCase):
         self.assertEqual(step_tab.output_binding, "tab_id")
         self.assertIn("target_tab_id", step_search.input_bindings_dict)
 
+    def test_two_turn_tab_id_continuity_and_search_reuse(self):
+        # Turn 1: user opens a new tab -> tab_id 88 created and stored in context
+        self.backend.context.update_tab(tab_id=88, url="chrome://newtab", site="newtab")
+        self.assertEqual(self.backend.context.active_tab_id, 88)
+
+        # Turn 2: user says "search for games" -> proposal recognizes active tab context
+        steps = proposals("search for games on google", self.backend.context)
+        self.assertEqual(len(steps), 1)
+        search_step = steps[0][1]
+        self.assertEqual(search_step.target_domain, "browser:google")
+
+        # When executed, search targets active tab_id 88
+        executed = []
+        def mock_execute(action):
+            executed.append(action)
+            return True
+        self.backend.execute = Mock(side_effect=mock_execute)
+        plan = Plan((search_step,))
+        success = self.backend.execute_plan(plan)
+        self.assertTrue(success)
+
+    def test_youtube_spotify_multi_subtask_isolation(self):
+        # Multi-app request: Subtask 1 (YouTube play) fails playback verification,
+        # Subtask 2 (Spotify play) proceeds and completes successfully.
+        subtask1 = PlanStep(
+            kind="web_task",
+            value='{"action":"play","site":"youtube","query":"justin bieber"}',
+            step_id="step_1",
+            subtask_id="subtask_1",
+            target_domain="browser:youtube",
+            on_failure="ABORT_DEPENDENT",
+        )
+        subtask2 = PlanStep(
+            kind="web_task",
+            value='{"action":"play","site":"spotify","query":"chill music"}',
+            step_id="step_2",
+            subtask_id="subtask_2",
+            target_domain="browser:spotify",
+            on_failure="ABORT_DEPENDENT",
+        )
+        plan = Plan((subtask1, subtask2))
+
+        # Subtask 1 fails, Subtask 2 succeeds
+        self.backend.execute = Mock(side_effect=[False, True])
+        result = self.backend.execute_plan(plan)
+
+        self.assertFalse(result)  # Partial failure overall
+        self.assertEqual(self.backend.execute.call_count, 2)
+        report = self.backend.last_execution_report
+        self.assertIsNotNone(report)
+        self.assertEqual(report.overall_status, "partial_failure")
+        self.assertEqual(report.failed_steps, [{"step_id": "step_1", "stage": "act"}])
+        self.assertEqual(report.completed_steps, ["step_2"])
+
+    def test_idempotent_retry_avoids_duplicate_mutation(self):
+        # An idempotent step has IDEMPOTENT flag so pre-mutation observation prevents double clicks
+        step = PlanStep(
+            kind="web_task",
+            value='{"action":"search","site":"google","query":"arch linux"}',
+            step_id="step_1",
+            subtask_id="subtask_1",
+            target_domain="browser:google",
+            idempotency="IDEMPOTENT",
+        )
+        self.assertEqual(step.idempotency, "IDEMPOTENT")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -92,6 +92,7 @@ ShellRoot {
         function hide(): void { root.hide() }
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }
         function appearance(name: string): void { root.send({command: "theme", name: name}) }
+        function voice(mode: string): void { root.send({command: "voice", mode: mode}) }
         function approve(approvalId: string): void { root.send({command: "approve", id: approvalId}) }
         function reject(approvalId: string): void { root.send({command: "reject", id: approvalId}) }
         function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, activityMessage: root.activityMessage, execution: root.lastExecution, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs, timelineSteps: root.timelineSteps, hasApproval: root.hasApproval}) }
@@ -179,8 +180,8 @@ ShellRoot {
                         implicitWidth: 24; implicitHeight: 28; leftPadding: 0; rightPadding: 0
                         palette.buttonText: root.theme.accent
                         ToolTip.visible: root.opened && surface.reveal > 0.99 && (hovered)
-                        ToolTip.text: "Theme: " + root.theme.name + ". Click for " + (root.theme.id === "omarchy" ? "Liquid" : "Omarchy")
-                        onClicked: root.send({command: "theme", name: root.theme.id === "omarchy" ? "liquid" : "omarchy"})
+                        ToolTip.text: "Theme: " + root.theme.name + ". Click for the next theme"
+                        onClicked: root.send({command: "theme", name: "next"})
                     }
                     ToolButton {
                         text: root.typing ? "⌨" : "Aa"; font.family: root.theme.font; font.pixelSize: 12
@@ -226,7 +227,9 @@ ShellRoot {
                     Layout.fillWidth: true; Layout.leftMargin: 12
                     text: root.busy ? (root.activityMessage || "Working…") : (root.lastAction || root.message)
                     color: root.actionError ? root.theme.error : root.theme.muted
-                    font.family: root.theme.font; font.pixelSize: 10; elide: Text.ElideRight
+                    font.family: root.theme.font; font.pixelSize: 10
+                    // File lists and answers need more than one line.
+                    wrapMode: Text.Wrap; maximumLineCount: 4; elide: Text.ElideRight
                     ToolTip.visible: root.opened && surface.reveal > 0.99 && (actionHover.hovered); ToolTip.text: text
                     HoverHandler { id: actionHover }
                 }

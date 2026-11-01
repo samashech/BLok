@@ -1,0 +1,8 @@
+{
+  "id": "diwali", "name": "Diwali", "followDesktop": false,
+  "radius": 22, "controlRadius": 12, "font": "Noto Serif", "mode": "dark",
+  "background": "#170a1f", "backgroundTop": "#2a0f2e", "backgroundBottom": "#10061a",
+  "foreground": "#fff3dc", "muted": "#d7b98e", "accent": "#ffb627",
+  "border": "#8a3b12", "surface": "#341437", "hover": "#47203f",
+  "success": "#ffd166", "error": "#ff6f59", "orb": "#ffc94d"
+}

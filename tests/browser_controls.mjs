@@ -80,4 +80,13 @@ try{
  assert.equal((await page.evaluate(pageAction,{op:'github_user'})).user,'fixture-user');
  assert.equal((await page.evaluate(pageAction,{op:'github_repository',query:'clickyai'})).url,'https://github.com/fixture-user/ClickyAI');
  console.log('PASS: artist matches track artist, and GitHub resolves repository within signed-in owner');
+ await page.route('https://downloads.example.org/**',r=>r.fulfill({contentType:'text/html',body:`<title>SuperTux download</title><nav><a href="/about">About</a></nav><a href="/files/supertux.AppImage">Download SuperTux for Linux</a><a href="/files/supertux.exe">Download for Windows</a><button>Donate</button>`}));
+ await page.goto('https://downloads.example.org/');
+ const found=await page.evaluate(pageAction,{op:'links',query:'supertux',download:true});
+ assert.deepEqual(found.links.map(l=>l.name),['Download SuperTux for Linux','Download for Windows']);
+ await page.evaluate(pageAction,{op:'click',control:found.links[0].control,page:found.page}).catch(()=>{});
+ await page.goto('https://www.google.com/search?q=x');
+ const results=await page.evaluate(pageAction,{op:'result_links'});
+ assert.deepEqual(results.links.map(l=>l.name),['Normal second']);
+ console.log('PASS: download links ranked (Linux first, non-downloads dropped) and Google result list');
 }finally{await browser.close();}

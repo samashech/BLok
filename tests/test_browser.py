@@ -7,11 +7,11 @@ from hyprash import browser
 class BrowserTests(unittest.TestCase):
     def test_browser_sequence(self):
         actions=parse('Go to the address bar and type weather in Delhi and press enter.')
-        self.assertEqual([(a.kind,a.value) for a in actions], [('address',''),('browser_type','weather in delhi'),('browser_key','enter')])
+        self.assertEqual([(a.kind,a.value) for a in actions], [('address',''),('browser_type','weather in Delhi'),('browser_key','enter')])
 
     def test_search_aliases(self):
         for text in ['look up weather in Delhi', 'look online for weather in Delhi', 'search for weather in Delhi']:
-            self.assertEqual(parse(text)[0].value, 'https://www.google.com/search?q=weather+in+delhi')
+            self.assertEqual(parse(text)[0].value, 'https://www.google.com/search?q=weather+in+Delhi')
 
     def test_query_keeps_conjunctions(self):
         self.assertEqual(parse("search for rock and roll")[0].value, "https://www.google.com/search?q=rock+and+roll")

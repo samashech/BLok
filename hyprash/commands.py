@@ -41,12 +41,14 @@ START = re.compile(
 
 def clean(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" .,!?\"")
-    return re.sub(r"(?:^|\s+)(?:and|then|and then|please|for me|and once.*|once.*|can you|and can you)$", "", value).strip()
+    return re.sub(r"(?:^|\s+)(?:and|then|and then|please|for me|and once.*|once.*|can you|and can you)$", "", value, flags=re.I).strip()
 
 
 def parse(text: str, final: bool = True, context: ConversationContext | None = None) -> list[Action]:
-    text_clean = text.lower().replace("dot com", ".com").replace("dot org", ".org")
-    text_clean = re.sub(r"\s+\.", ".", text_clean)
+    # Match on lowercase, but slice arguments from the cased text (same length).
+    text_cased = re.sub(r"\s+dot\s+(com|org)\b", r".\1", text, flags=re.I)
+    text_cased = re.sub(r"\s+\.", ".", text_cased)
+    text_clean = text_cased.lower()
 
     # Never reinterpret negated or quoted requests as affirmative commands.
     if re.search(r"\b(?:don't|do not|never|cancel|actually|instead)\b", text_clean):
@@ -75,7 +77,8 @@ def parse(text: str, final: bool = True, context: ConversationContext | None = N
     for i, match in enumerate(matches):
         verb = match.group().lower()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text_clean)
-        arg = clean(text_clean[match.end():end])
+        arg = clean(text_cased[match.end():end])
+        lowered = arg.lower()
         closed = final or i + 1 < len(matches)
         action = None
         if verb.endswith("search bar"):
@@ -89,11 +92,11 @@ def parse(text: str, final: bool = True, context: ConversationContext | None = N
         elif verb == "stop listening":
             action = Action("stop")
         elif "workspace" in verb and closed:
-            number = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}.get(arg, arg)
+            number = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}.get(lowered, lowered)
             if number.isdigit() and 1 <= int(number) <= 10:
                 action = Action("workspace", number)
         elif verb.startswith(("open", "launch", "go to", "visit")):
-            target = re.sub(r"^(?:the|my) ", "", arg)
+            target = re.sub(r"^(?:the|my) ", "", lowered)
             target = re.sub(r" (?:app|application|for me|please)$", "", target)
             if target in APPS:
                 action = Action("open", APPS[target])

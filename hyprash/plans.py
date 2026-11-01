@@ -9,13 +9,14 @@ import re
 from typing import Any
 from urllib.parse import quote_plus
 
-from hyprash.commands import Action, START, parse
+from hyprash.commands import Action, START, parse, SITES
 from hyprash.workflows import workflow
 from hyprash.nlu import split_compound_utterance, resolve_intent, ConversationContext
 
+# File, window and download verbs are handled by bounded tools (hyprash/router.py)
+# with approval cards. System-level and outbound actions stay unsupported.
 UNSUPPORTED_VERB = re.compile(
-    r'\b(?:delete|erase|remove|send|upload|install|uninstall|download|rename|move|copy|close|'
-    r'shut ?down|restart|reboot|format|destroy)\b', re.I)
+    r'\b(?:send|upload|uninstall|shut ?down|restart|reboot|format|destroy|wipe)\b', re.I)
 
 
 SENSITIVE_WORDS = re.compile(
@@ -68,6 +69,18 @@ def assess_step_risk(kind_or_action: Any, value: str | None = None, confidence: 
         return "STATE_MUTATING", False, ""
     elif kind in ("open", "url", "address"):
         return "SAFE_NAVIGATE", False, ""
+    elif kind == "tool":
+        # Destructive file actions and downloads ask for approval after their
+        # target is resolved, so the card can name the exact file or link.
+        try:
+            name = json.loads(value).get("tool", "")
+        except ValueError:
+            name = ""
+        if name in ("file_find", "file_read", "file_pick", "answer"):
+            return "SAFE_READ", False, ""
+        if name in ("file_open", "volume", "brightness", "media"):
+            return "SAFE_NAVIGATE", False, ""
+        return "STATE_MUTATING", False, ""
 
     return "SAFE_READ", False, ""
 
@@ -239,6 +252,14 @@ def _infer_step_attributes(kind: str, value: str) -> tuple[str, str, list[str], 
             domain = "browser:general"
         idempotency = "IDEMPOTENT"
         postconditions = ["destination_matched"]
+    elif kind == "tool":
+        try:
+            name = json.loads(value).get("tool", "")
+        except ValueError:
+            name = ""
+        domain = ("desktop:files" if name.startswith("file_") else "browser:download" if name == "download"
+                  else "desktop:" + name)
+        idempotency = "IDEMPOTENT" if name in ("file_find", "file_read", "file_open", "answer") else "NON_IDEMPOTENT"
     elif kind in ("address", "browser_type", "browser_key"):
         domain = "browser:chrome"
         idempotency = "NON_IDEMPOTENT" if kind == "browser_key" and value == "new tab" else "IDEMPOTENT"
@@ -280,7 +301,8 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
         r'\s+and\s+(?=(?:open|create|make|write|add|take|search|look|play|put|blast|'
         r'go|visit|launch|fire|spin|bring|hop|click|select|focus|type|enter|press|'
         r'hit|reload|switch|find|delete|send|upload|install|remove|close|stop|'
-        r'rename|download|run|start|execute|gimme|give)\b)'
+        r'rename|download|run|start|execute|gimme|give|turn|mute|unmute|pause|resume|lock|read|copy|move|'
+        r'show|check|pull|watch|listen|set|tell|do|skip|trash|dim|lower|raise|maximize|switch|put|bump)\b)'
     )
     chunks = re.split(boundary, masked, flags=re.I)
     if any(not chunk.strip() for chunk in chunks) or len(chunks) > 8:
@@ -354,17 +376,17 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
                 # 2. Try parse()
                 parsed = parse(candidate, final=True, context=active_context)
                 start = START.search(candidate)
-                if len(parsed) == 1:
-                    if start and start.start() != 0 and not workflow(candidate):
-                        raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+                if len(parsed) == 1 and not (start and start.start() != 0 and not workflow(candidate)):
                     action = parsed[0]
                 elif resolved.action_kind and resolved.intent_type not in ("cancel", "unsupported", "clarify"):
                     action = Action(resolved.action_kind, resolved.action_value)
-                elif start is None and len(chunks) == 1:
-                    result.append((restore(clause), None))
-                    break
                 else:
-                    raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+                    # No rule understood this clause: local Laya routes it
+                    # (hyprash/router.py) before anything runs.
+                    result.append((restore(clause), None))
+                    i += 1
+                    step_counter += 1
+                    continue
 
             fixed = {
                 'photo': r'take(?: a)? (?:picture|photo|selfie)(?: of me)?',
@@ -420,8 +442,9 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
         domain, idemp, pre, post = _infer_step_attributes(action.kind, value)
 
         # Subtask isolation: if domain switches (e.g. youtube -> spotify), bump subtask_counter
+        # A clause left for Laya (None) has no domain; it starts a new subtask.
         if result:
-            prev_domain = result[-1][1].target_domain
+            prev_domain = result[-1][1].target_domain if result[-1][1] else None
             if domain != prev_domain and not (prev_domain == "browser:general" and domain.startswith("browser:")):
                 subtask_counter += 1
         subtask_id = f"subtask_{subtask_counter}"

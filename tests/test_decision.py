@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import patch, Mock
 from hyprash.decision import LayaDecision, Decision
@@ -24,9 +25,41 @@ class DecisionTests(unittest.TestCase):
         model=self.engine('Open browser',{'Open browser':0.99,'No action':0.01})
         self.assertIsNone(model.decide("don't open browser").action)
 
+    def routed(self, answers):
+        """Fake Laya answering each question by its first option found in `answers`."""
+        agent=Mock()
+        def predict(_, request):
+            criteria=request['decision']['criteria']
+            choice=next((a for a in answers if a in criteria), 'None of these')
+            probabilities={k:0.02 for k in criteria}; probabilities[choice]=answers.get(choice,0.9)
+            return {'answers':{'decision':{'choice':choice,'probabilities':probabilities}}}
+        agent.predict.side_effect=predict
+        return LayaDecision(agent)
+
     def test_natural_language_is_routed_by_model(self):
-        model=self.engine('Open terminal',{'Open terminal':0.98,'No action':0.02})
-        self.assertEqual(model.decide('I need my terminal').action,Action('open','terminal'))
+        model=self.routed({'App windows and workspaces':0.9,'Open an app':0.95})
+        self.assertEqual(model.route('I need my terminal').action,Action('open','terminal'))
+
+    def test_two_stage_routing_extracts_file_slots(self):
+        model=self.routed({'Files and folders':0.8,'Add text to a file':0.97})
+        action=model.route('could you stick buy milk onto my todo list').action
+        self.assertIsNone(action)  # "stick" is not an extraction verb: ask, never guess
+        action=model.route('put buy milk into my todo file').action
+        self.assertEqual(json.loads(action.value),{'tool':'file_append','text':'buy milk','query':'todo'})
+
+    def test_routed_risky_tool_needs_approval_when_unsure(self):
+        model=self.routed({'Files and folders':0.8,'Delete a file':0.7})
+        action=model.route('get rid of old report').action
+        self.assertTrue(action.requires_approval)
+
+    def test_routing_none_of_these_runs_nothing(self):
+        model=self.routed({'Web browser and websites':0.6})
+        self.assertIsNone(model.route('i like turtles').action)
+
+    def test_unknown_clause_in_plan_goes_to_router(self):
+        model=self.routed({'Volume, brightness and system':0.9,'Volume up':0.95,'Open the website www.youtube.com':0.95})
+        decision=model.plan('open youtube and make it a bit louder')
+        self.assertEqual(json.loads(decision.action.steps[1].value),{'tool':'volume','op':'up'})
 
     def test_missing_arguments_not_invented(self):
         model=self.engine('Change note title',{'Change note title':0.99,'No action':0.01})

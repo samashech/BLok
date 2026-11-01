@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase6-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase7-v1'};
   const {epoch:turn}=await chrome.storage.session.get('epoch');
   const flow=execution({progress,check:async()=>{
     const {epoch}=await chrome.storage.session.get('epoch');
@@ -108,6 +108,34 @@ export async function run(req, progress=()=>{}) {
         }catch(error){throw Error('Step '+(i+1)+' of '+task.steps.length+' failed: '+error.message);}
       }
       return result;
+    }
+    if(task.action==='links') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await loaded();
+      const found=await flow.observe('Reading links on the page',()=>page({op:task.results?'result_links':'links',query:task.query||'',download:!!task.download}));
+      return confirmed('Found '+found.links.length+' candidate links','Visible links observed',{...found,tab_id:tab.id,tabId:tab.id});
+    }
+    if(task.action==='download') {
+      if(!/^https?:\/\//.test(task.url||''))throw Error('Only web URLs can be downloaded.');
+      const id=await flow.act('Starting the download',()=>chrome.downloads.download({url:task.url}));
+      const item=await flow.verify('Confirming the download',async()=>{const [d]=await chrome.downloads.search({id});return d&&d.state!=='interrupted'&&d.filename?d:false;},10000);
+      return confirmed('Downloading '+item.filename.split('/').pop(),'Browser download item created',{download_id:id,filename:item.filename});
+    }
+    if(task.action==='click_download') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await focus(tab);
+      const since=new Date(Date.now()-1000).toISOString();
+      await flow.act('Clicking the download link',()=>page({op:'click',control:task.control,page:task.page}));
+      try {
+        const item=await flow.verify('Waiting for the download to start',async()=>{
+          const items=await chrome.downloads.search({startedAfter:since,orderBy:['-startTime']});
+          return items.find(d=>d.state!=='interrupted'&&d.filename)||false;
+        },15000);
+        return confirmed('Downloading '+item.filename.split('/').pop(),'Browser download item created after the click',{filename:item.filename});
+      } catch(error) {
+        tab=await chrome.tabs.get(tab.id);
+        return {message:'Clicked the link, but no download started yet. Now on '+new URL(tab.url).hostname+'. Say "click" and the next button name to continue.',verified:false,evidence:'No download item observed',tabId:tab.id,url:tab.url};
+      }
     }
     if(task.action==='new_tab') {
       await flow.act('Creating a new tab',async()=>{

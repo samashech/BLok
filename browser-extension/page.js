@@ -1,17 +1,33 @@
 // Executed in Chrome's isolated world. Page text is data, never executable input.
 export async function pageAction(request, captureErrors=false) {
   try {
-  const visible = e => { const r=e.getBoundingClientRect(),s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'; };
+  const visible = e => {
+    if(!e || e.nodeType !== 1) return false;
+    const r=e.getBoundingClientRect(), s=getComputedStyle(e);
+    return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none' && s.opacity!=='0' && s.pointerEvents!=='none';
+  };
   const norm = s => String(s||'').toLowerCase().replace(/[’]/g,"'").replace(/\s+/g,' ').trim();
   const name = e => (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>e.getRootNode().getElementById?.(id)?.textContent||document.getElementById(id)?.textContent||'').join(' ').trim() || e.getAttribute('aria-label') || (e.labels && [...e.labels].map(l=>l.innerText).join(' ')) || e.getAttribute('placeholder') || e.innerText || e.title || '';
-  const interactive = 'button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[role="combobox"],[contenteditable="true"]';
+  const searchIndicators = ['search', 'magnify', 'glass', 'lookup', 'find', 'query', 'searchbox', 'search-btn', 'search-button'];
+  const isInteractive = e => {
+    if(!e || e.nodeType !== 1) return false;
+    const tag = e.tagName.toLowerCase();
+    if(tag === 'html' || tag === 'body' || tag === 'label') return false;
+    if(e.matches('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[role="combobox"],[role="search"],[role="searchbox"],[contenteditable="true"],details,summary,option,optgroup')) return true;
+    const cls = String(e.className || '').toLowerCase();
+    const id = String(e.id || '').toLowerCase();
+    if(searchIndicators.some(ind => cls.includes(ind) || id.includes(ind))) return true;
+    if(e.hasAttribute('onclick') || e.hasAttribute('tabindex')) return true;
+    try { if(getComputedStyle(e).cursor === 'pointer' && !e.querySelector('button,a,input,textarea,select')) return true; } catch(_) {}
+    return false;
+  };
   const allNodes = () => {
     const found=[];
     const visit=root => {
       const walker=document.createTreeWalker(root,NodeFilter.SHOW_ELEMENT);
       let node;
       while((node=walker.nextNode())) {
-        if(node.matches(interactive)) found.push(node);
+        if(isInteractive(node)) found.push(node);
         if(node.shadowRoot) visit(node.shadowRoot);
       }
     };
@@ -64,6 +80,31 @@ export async function pageAction(request, captureErrors=false) {
     const result={url:location.href,title:document.title,page:page(),controls};
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
+  }
+  if(request.op==='links') {
+    // Candidate links/buttons for a download. Laya chooses among them in Python.
+    const words=norm(request.query).split(' ').filter(w=>w.length>2);
+    const fileLike=/\.(exe|msi|zip|7z|rar|tar|gz|xz|bz2|dmg|pkg|deb|rpm|appimage|flatpak|apk|iso|jar)(\?|$)/i;
+    const scored=nodes.filter(e=>e.matches('a[href],button,[role="button"],input[type="submit"]')).map(e=>{
+      const label=norm(name(e)).slice(0,140), href=e.matches('a[href]')?e.href:'';
+      let score=0;
+      if(/download|get it|install|free/.test(label))score+=5;
+      if(/download/i.test(href))score+=3;
+      if(fileLike.test(href))score+=4;
+      if(/linux/.test(label+' '+href))score+=1;
+      if(/windows|\.exe|\.msi|mac ?os|\.dmg/.test(label+' '+href))score-=1;
+      score+=words.filter(w=>label.includes(w)).length;
+      return {e,label,href,score};
+    }).filter(x=>x.label&&(!request.download||x.score>=5)&&!/^javascript:/i.test(x.href));
+    scored.sort((a,b)=>b.score-a.score);
+    return {url:location.href,title:document.title,page:page(),
+      links:scored.slice(0,9).map(x=>({name:name(x.e).trim().slice(0,140),href:x.href,control:descriptor(x.e)}))};
+  }
+  if(request.op==='result_links') {
+    if(!/(^|\.)google\./.test(location.hostname)) throw Error('Open a Google results page first.');
+    const links=[...new Set([...document.querySelectorAll('#search a:has(h3),#rso a:has(h3)')])].filter(e=>visible(e)&&/^https?:/.test(e.href));
+    links.sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
+    return {url:location.href,links:links.slice(0,8).map(e=>({name:(e.querySelector('h3')?.innerText||name(e)).trim().slice(0,140),href:e.href}))};
   }
   if(request.op==='search') {
     const selectors=request.site==='google'?'textarea[name="q"],input[name="q"]':request.site==='youtube'?'input[name="search_query"],input#search': 'input[data-testid="search-input"],input[placeholder*="play"],input[role="searchbox"]';
@@ -118,12 +159,12 @@ export async function pageAction(request, captureErrors=false) {
   if(request.op==='video_play') {
     const video=document.querySelector('video.html5-main-video,video');
     if(!video) throw Error('The video player has not loaded yet.');
-    await video.play();
-    return {playing:!video.paused && !video.ended && video.readyState>=2};
+    try { await video.play(); } catch(_) {}
+    return {playing:!video.paused && !video.ended && (video.currentTime > 0 || video.readyState>=2)};
   }
   if(request.op==='video_playing') {
     const video=document.querySelector('video.html5-main-video,video');
-    return {playing:!!video&&!video.paused&&!video.ended&&video.readyState>=2};
+    return {playing:!!video&&!video.paused&&!video.ended&&(video.currentTime > 0 || video.readyState>=2)};
   }
   if(request.op==='result') {
     let links=[];

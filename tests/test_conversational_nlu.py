@@ -8,8 +8,9 @@ Tests 40+ conversational variations across:
 5. Contextual follow-up resolution & working memory continuity
 6. Empty speech guards & ASR quirks
 """
+import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hyprash.nlu import (
     ConversationContext,
@@ -258,6 +259,71 @@ class ConversationalNLUTests(unittest.TestCase):
     def test_empty_speech_guard_bare_empty(self):
         intent = resolve_intent("", self.context)
         self.assertEqual(intent.intent_type, "empty")
+
+    # --- 7. Local Gemma 2B Structured Task Compiler & Fallback (5 tests) ---
+    def test_gemma_task_compiler_fastpath(self):
+        from hyprash.llm_parser import compile_task
+        task = compile_task("open a new tab", self.context)
+        self.assertTrue(task.understood)
+        self.assertEqual(task.parser_used, "fastpath")
+        self.assertEqual(len(task.subtasks), 1)
+        self.assertEqual(task.subtasks[0].intent, "open_tab")
+
+    def test_gemma_task_compiler_deterministic_fallback(self):
+        from hyprash.llm_parser import compile_task_fallback
+        task = compile_task_fallback("fire up foot and search for arch linux", self.context)
+        self.assertTrue(task.understood)
+        self.assertEqual(len(task.subtasks), 2)
+        self.assertEqual(task.subtasks[0].domain, "terminal")
+        self.assertEqual(task.subtasks[1].intent, "search")
+
+    def test_gemma_task_compiler_mocked_llm_json(self):
+        from hyprash.llm_parser import call_gemma_compiler, compiled_task_to_plan
+        mock_response = json.dumps({
+            "understood": True,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "subtasks": [
+                {"subtask_id": 1, "domain": "youtube", "intent": "play_media", "query": "justin bieber", "ordinal": 1, "use_active_tab": False},
+                {"subtask_id": 2, "domain": "spotify", "intent": "play_media", "query": "chill music", "ordinal": 1, "use_active_tab": False}
+            ]
+        }).encode("utf-8")
+
+        mock_payload = json.dumps({"response": mock_response.decode("utf-8")}).encode("utf-8")
+
+        with patch("urllib.request.urlopen") as mock_url:
+            mock_resp = Mock()
+            mock_resp.read.return_value = mock_payload
+            mock_resp.__enter__ = Mock(return_value=mock_resp)
+            mock_resp.__exit__ = Mock(return_value=False)
+            mock_url.return_value = mock_resp
+
+            task = call_gemma_compiler("open youtube and play justin bieber then hop to spotify and play chill music")
+            self.assertIsNotNone(task)
+            self.assertTrue(task.understood)
+            self.assertEqual(len(task.subtasks), 2)
+            self.assertEqual(task.subtasks[0].domain, "youtube")
+            self.assertEqual(task.subtasks[1].domain, "spotify")
+
+            plan = compiled_task_to_plan(task, self.context)
+            self.assertEqual(len(plan.steps), 2)
+            self.assertEqual(plan.steps[0].subtask_id, "subtask_1")
+            self.assertEqual(plan.steps[1].subtask_id, "subtask_2")
+
+    def test_broken_grammar_phonetic_typos(self):
+        # Voxtype phonetic quirks: "spotfy" -> spotify, "youtub" -> youtube
+        intent_sp = resolve_intent("play some music on spotfy", self.context)
+        self.assertEqual(intent_sp.slots.get("site"), "spotify")
+
+        intent_yt = resolve_intent("look up rust on youtub", self.context)
+        self.assertEqual(intent_yt.slots.get("site"), "youtube")
+
+    def test_multi_app_compound_chain_proposals(self):
+        steps = proposals("open a tab and search for games then open notes", self.context)
+        self.assertGreaterEqual(len(steps), 3)
+        self.assertEqual(steps[0][1].kind, "web_task")
+        self.assertEqual(steps[1][1].kind, "web_task")
+        self.assertEqual(steps[2][1].kind, "open")
 
 
 if __name__ == "__main__":

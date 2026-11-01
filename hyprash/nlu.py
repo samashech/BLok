@@ -38,6 +38,14 @@ SITES = {
     "twitter": "https://x.com",
     "reddit": "https://www.reddit.com",
     "wikipedia": "https://www.wikipedia.org",
+    "gmail": "https://mail.google.com", "mail": "https://mail.google.com", "email": "https://mail.google.com",
+    "my mail": "https://mail.google.com", "my email": "https://mail.google.com", "my inbox": "https://mail.google.com",
+    "netflix": "https://www.netflix.com", "amazon": "https://www.amazon.in", "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com", "linkedin": "https://www.linkedin.com", "twitch": "https://www.twitch.tv",
+    "chatgpt": "https://chatgpt.com", "claude": "https://claude.ai", "whatsapp": "https://web.whatsapp.com",
+    "discord": "https://discord.com/app", "steam": "https://store.steampowered.com", "maps": "https://maps.google.com",
+    "google maps": "https://maps.google.com", "drive": "https://drive.google.com", "google drive": "https://drive.google.com",
+    "calendar": "https://calendar.google.com", "stack overflow": "https://stackoverflow.com", "chess": "https://www.chess.com",
 }
 
 FILLER_PREFIXES = re.compile(
@@ -48,7 +56,8 @@ FILLER_PREFIXES = re.compile(
     r'hey hyprash|hey assistant|hey|hi hyprash|hi|hello|'
     r'okay hyprash|okay now|okay|ok now|ok|'
     r'i wanna|i want you to|i want to|i would like you to|i would like to|i\'d like you to|i\'d like to|'
-    r'i need you to|i need to|'
+    r'i need you to|i need to|i have to|i gotta|i\'m trying to|im trying to|trying to|help me|'
+    r'do me a favor and|do me a favour and|would you mind|could you maybe|can you maybe|'
     r'let\'s|lets|'
     r'go ahead and|feel free to|'
     r'now please|now|just|'
@@ -196,9 +205,64 @@ class ConversationContext:
         }
 
 
+HESITATIONS = re.compile(r"\b(?:u+h+m*|u+m+|e+r+m*|hm+|mm+|ah+|uh-huh|whatchamacallit|"
+                         r"what'?s it called|what is it called|what do you call it|how do you say it|"
+                         r"you know what i mean|you know|i guess|i think|kind of|kinda|sort of|sorta|"
+                         r"basically|literally|honestly|like literally)\b[,.]?", re.I)
+VAGUE_TAILS = re.compile(r"[,.]?\s+(?:or something(?: like that)?|or whatever|or anything|or so|"
+                         r"if you can|if you could|if that'?s okay|when you get a chance|real quick|"
+                         r"quickly|thanks?(?: you)?(?: so much)?|please|pls|plz|man|bro|dude|buddy|mate|"
+                         r"my friend|for me|for us|i guess|right now|now)\s*[.!?]*$", re.I)
+OPENERS = re.compile(r"^(?:(?:hey|hi|hello|yo|oi|okay|ok|alright|all right|right|so|well|yeah|yes|yep|"
+                     r"uh|um|hyprash|assistant|computer|man|bro|dude|buddy|mate)\b[,.!]?|(?:listen|look)[,!])\s+", re.I)
+SLANG = {
+    r"\bu\b": "you", r"\bur\b": "your", r"\bpls\b|\bplz\b": "please", r"\bwanna\b": "want to",
+    r"\bgonna\b": "going to", r"\bgimme\b": "give me", r"\blemme\b": "let me", r"\bgotta\b": "have to",
+    r"\byt\b": "youtube", r"\byoutubes?\b": "youtube", r"\bthe youtube\b": "youtube",
+    r"\bvs ?code\b": "vs code", r"\bgmail\b": "gmail", r"\blookup\b": "look up",
+    r"\bcan ya\b": "can you", r"\bcould ya\b": "could you",
+}
+
+
+def tidy_speech(text: str) -> str:
+    """Spoken, fumbled English → a plain request, keeping the words that carry meaning.
+
+    Removes hesitations ("uh", "what's it called"), stutters ("open the open the
+    browser"), vague tails ("or something"), friendly openers ("hey man") and
+    expands chat slang ("u", "wanna", "yt"). Quoted text is left untouched.
+    """
+    literals = {}
+    def protect(m):
+        key = f"hyprashquote{len(literals)}x"
+        literals[key] = m.group(0)
+        return key
+    s = re.sub(r'"[^"\n]*"', protect, text.strip().replace('’', "'"))
+    s = re.sub(r"[\u2013\u2014]+|--|\.\.\.+", " ", s)
+    for pattern, replacement in SLANG.items():
+        s = re.sub(pattern, replacement, s, flags=re.I)
+    s = HESITATIONS.sub(" ", s)
+    # Filler "like": "can you like open", ", like, ", "just like open" — not "i like turtles".
+    s = re.sub(r"(?:(?<=\byou)|(?<=\bjust)|(?<=\bso)|(?<=,)|^)\s*,?\s*like\s*,?\s+", " ", s, flags=re.I)
+    s = re.sub(r"\s*,\s*like\s*,\s*", " ", s, flags=re.I)
+    s = re.sub(r"\b(?:just|kindly|maybe|perhaps|quickly|real quick)\s+(?=\w)", "", s, flags=re.I)
+    s = re.sub(r"\s*,\s*", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    # Stutters: a repeated word or phrase of up to four words ("search for search for").
+    for _ in range(3):
+        s = re.sub(r"\b((?:\w+'?\w*\s+){0,3}\w+'?\w*)\s+\1\b", r"\1", s, flags=re.I)
+    prev = None
+    while prev != s:
+        prev = s
+        s = OPENERS.sub("", s).strip()
+        s = VAGUE_TAILS.sub("", s).strip()
+    for key, literal in literals.items():
+        s = s.replace(key, literal)
+    return s.strip(" ,")
+
+
 def normalize_utterance(text: str) -> str:
     """Clean conversational fillers, contractions, and domain words while preserving quotes and semantic entities."""
-    repaired = repair_self_corrections(text)
+    repaired = repair_self_corrections(tidy_speech(text))
     s = repaired.strip().replace('’', "'")
     s = s.replace("dot com", ".com").replace("dot org", ".org").replace("dot net", ".net")
     s = re.sub(r"\s+\.", ".", s)
@@ -550,8 +614,57 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
                     action_value=json.dumps(seq_task),
                 )
 
+    # 11b. Desktop tools: files, volume, brightness, media, windows, questions, downloads
+    from hyprash.router import match_rule
+    tool_match = match_rule(norm)
+    if tool_match:
+        tool_intent, tool_action = tool_match
+        return ResolvedIntent(
+            intent_type="tool:" + tool_intent,
+            confidence=0.95,
+            raw_text=raw,
+            normalized_text=norm,
+            action_kind=tool_action.kind,
+            action_value=tool_action.value,
+        )
+
+    # 11c. Everyday phrasing for media and sites
+    # "watch/see some cat videos (on youtube)" → YouTube search
+    m = re.fullmatch(r'(?:watch|see|show me|find me|look for|look at|check out|pull up|bring up)(?: some| a| the)? (.+?)(?: videos?| clips?)?(?: on| in) (?:youtube|youtub)', norm, re.I) \
+        or re.fullmatch(r'watch(?: some| a| the)? (.+?)(?: videos?| clips?)?', norm, re.I) \
+        or re.fullmatch(r'(?:see|show me|find me)(?: some| a)? (.+? (?:videos?|clips?|trailers?|gameplay))', norm, re.I)
+    if m:
+        query = m[1].strip() + (' videos' if re.search(r'\bvideos?\b', norm, re.I) and not re.search(r'videos?|trailer|gameplay', m[1], re.I) else '')
+        task = {"action": "search", "site": "youtube", "query": query}
+        return ResolvedIntent(intent_type="search", entities={"site": "youtube", "query": query}, confidence=0.93,
+                              raw_text=raw, normalized_text=norm, action_kind="web_task", action_value=json.dumps(task))
+    # "listen to arijit singh" → play on Spotify
+    m = re.fullmatch(r'(?:listen to|hear)(?: some)? (.+)', norm, re.I)
+    if m and not re.fullmatch(r'me|this|that|it', m[1], re.I):
+        norm = 'play ' + m[1]
+    # "look up / pull up / check reddit" → open the site, not a Google search for its name
+    m = re.fullmatch(r'(?:look up|pull up|bring up|check|check out|go on|get on|hop on|load|show me|take me to) (?:the |my )?(.+?)(?: website| site| page)?', norm, re.I)
+    if m:
+        target = m[1].strip().lower()
+        url = SITES.get(target) or SITES.get(target.removesuffix('.com'))
+        if not url and re.fullmatch(r'(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:/\S*)?', target):
+            url = 'https://' + target
+        if url:
+            return ResolvedIntent(intent_type="navigate", entities={"url": url}, confidence=0.94, raw_text=raw,
+                                  normalized_text=norm, action_kind="url", action_value=url)
+    # "pull up the weather in mumbai on google" → Google search
+    m = re.fullmatch(r'(?:pull up|bring up|check|show me|find|get me|tell me|what\'s|what is) (?:the )?(.+?) (?:on|in|using|with) google', norm, re.I)
+    if m:
+        task = {"action": "search", "site": "google", "query": m[1].strip()}
+        return ResolvedIntent(intent_type="search", entities=task, confidence=0.94, raw_text=raw, normalized_text=norm,
+                              action_kind="web_task", action_value=json.dumps(task))
+    # "open this app" / "open something" → ask which one instead of guessing
+    if re.fullmatch(r'(?:open|launch|start|run|pull up|bring up) (?:this|that|an?|the|some|my)? ?(?:app|application|program|thing|something|stuff|one)', norm, re.I):
+        return ResolvedIntent(intent_type="clarify", confidence=0.5, requires_clarification=True, raw_text=raw,
+                              normalized_text=norm, ambiguity_reason="Which app should I open?")
+
     # 12. Search or Play on Specific Site (Google, YouTube, Spotify)
-    site_pattern = r'(google|youtube|spotify)(?:\s*dot\s*com|\.com)?'
+    site_pattern = r'(google|youtube|youtub|spotify|spotfy)(?:\s*dot\s*com|\.com)?'
 
     # "google search games", "youtube search bbs", "spotify play god's plan"
     m = re.fullmatch(rf'^{site_pattern} (search(?: for| up)?|play(?: some)?|look up|put on|blast|throw on|spin) (.+)$', norm, re.I)
@@ -559,18 +672,24 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         # "open google and search for games", "go to youtube and play bbs"
         m = re.fullmatch(rf'^(?:open|go to|visit) (?:www\.)?{site_pattern}(?: and(?: then)?| then) (search(?: for| up)?|play(?: some)?|look up|put on|blast|throw on|spin) (.+)$', norm, re.I)
     if not m:
+        # "search youtube for elden ring", "look up on youtube for cats"
+        m_for = re.fullmatch(rf'^(?:search|look up|look for|find)(?: on| in)? {site_pattern} for (.+)$', norm, re.I)
+        if m_for:
+            m = re.fullmatch(rf'^{site_pattern} (search) (.+)$', f'{m_for[1]} search {m_for[2]}', re.I)
+    if not m:
         # "search for games on google", "play god's plan on spotify"
         m = re.fullmatch(rf'^(search(?: for| up)?|play(?: some)?|put on|blast|throw on|spin|look up|find(?: some)?) (.+?) (?:on|in) {site_pattern}$', norm, re.I)
     if m:
         groups = m.groups()
         if len(groups) == 3:
-            if groups[0].lower() in ('google', 'youtube', 'spotify'):
+            if groups[0].lower() in ('google', 'youtube', 'youtub', 'spotify', 'spotfy'):
                 site_name, verb, query = groups[0].lower(), groups[1].lower(), groups[2].strip()
             else:
                 verb, query, site_name = groups[0].lower(), groups[1].strip(), groups[2].lower()
         else:
             site_name, verb, query = groups[0].lower(), groups[1].lower(), groups[2].strip()
 
+        site_name = "youtube" if "youtub" in site_name else "spotify" if "spotfy" in site_name else site_name
         is_play = any(verb.startswith(p) for p in ('play', 'put', 'blast', 'throw', 'spin'))
         task: dict[str, Any] = {
             'action': 'play' if is_play else 'search',
@@ -613,9 +732,9 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 14. General "search for <query>", "look up <query>", "find <query> online"
-    m = re.fullmatch(r'(?:search(?: for| up)?|look up|find me|check out|see what\'s on|find online|look online for|search the web for|find) (.+?)(?: online)?', norm, re.I)
+    m = re.fullmatch(r'(?:search(?: for| up)?|look up|find me|check out|see what\'s on|find online|look online for|search the web for|find|google search|look for) (.+?)(?: online| on the (?:web|internet))?', norm, re.I)
     if m:
-        query = m[1].strip()
+        query = re.sub(r'^(?:the|some|a) ', '', m[1].strip(), flags=re.I)
         site = context.active_site if (context and context.active_site in ('google', 'youtube', 'spotify')) else "google"
         task = {"action": "search", "site": site, "query": query}
         if context and context.active_tab_id:
@@ -631,7 +750,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 15. "Play <track/artist>" (defaults to Spotify, unless explicit)
-    m = re.fullmatch(r'(?:play(?: some)?|put on|blast|throw on|spin(?!\s+up)|queue up) (.+)', norm, re.I)
+    m = re.fullmatch(r'(?:play|put on|blast|throw on|spin(?!\s+up)|queue up)(?: me)?(?: some| a few| a little)? (.+)', norm, re.I)
     if m and not re.match(r'(?:the )?(?:first|second|third|fourth|fifth|[1-9])(?: |$)', m[1], re.I):
         song = m[1].strip()
         task = {'action': 'play', 'site': 'spotify', 'query': song}
@@ -733,7 +852,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 18. Application Launching & Site Navigation
-    m = re.fullmatch(r'(?:open(?: up)?|launch|bring up|go to|visit|fire up|spin up|hop over to|hop to|pull up|pop open|switch to) (?:the |my )?(.+)', norm, re.I)
+    m = re.fullmatch(r'(?:open(?: up)?|launch|bring up|go to|visit|fire up|spin up|hop over to|hop to|pull up|pop open|switch to|i need|i want|gimme|give me|go on|get on|hop on|load up|start up) (?:the |my )?(.+)', norm, re.I)
     if m:
         target = m[1].strip().lower().removesuffix(" app").removesuffix(" application")
         if target in APPS:
