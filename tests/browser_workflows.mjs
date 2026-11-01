@@ -29,7 +29,7 @@ globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v
   else if(req.op==='github_repository')result={url:'https://github.com/fixture-user/ClickyAI',title:'ClickyAI'};
   else throw Error('Unexpected op '+req.op);
   return [{result}];
- }},runtime:{onStartup:noop,onInstalled:noop},alarms:{onAlarm:noop},action:{onClicked:noop}};
+ }},runtime:{onStartup:noop,onInstalled:noop,onMessage:noop},alarms:{onAlarm:noop},action:{onClicked:noop}};
 let source=await readFile(new URL('../browser-extension/background.js',import.meta.url),'utf8');
 source=source.replace("import {pageAction} from './page.js';",'const pageAction=()=>{};').replace(/connect\(\);\s*$/,'');
 source=source.replace("'./execution.js'",JSON.stringify(new URL('../browser-extension/execution.js',import.meta.url).href));
