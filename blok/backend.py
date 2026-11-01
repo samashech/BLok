@@ -638,6 +638,8 @@ class Backend:
             return system.media(task['op'])
         if name == 'lock':
             return system.lock()
+        if name in ('arrange', 'layout_save', 'layout_restore', 'layout_list', 'focus', 'where', 'workspace_info', 'close_others'):
+            return self.window_tool(name, task)
         if name in ('hints', 'hint', 'scroll', 'type', 'key', 'handsfree'):
             return self.hands_free_tool(name, task)
         if name == 'plugin':
@@ -704,6 +706,36 @@ class Backend:
             return bool(browser.BROWSERS.fullmatch(json.loads(browser.run(['hyprctl', '-j', 'activewindow']) or '{}').get('class', '')))
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
             return False
+
+    def window_tool(self, name, task):
+        """Phase 3: arrange apps, saved setups, focus mode and questions about windows."""
+        from blok import choreo
+        if name == 'arrange':
+            return choreo.arrange(task['left'], task['right'])
+        if name == 'layout_save':
+            if not task.get('name'):
+                return 'What should I call it? Say "save this layout as coding".'
+            return choreo.save_layout(task['name'])
+        if name == 'layout_restore':
+            return choreo.restore_layout(task['name'])
+        if name == 'layout_list':
+            saved = choreo.layouts()
+            return ('Saved layouts: ' + ', '.join(saved)) if saved else 'No saved layouts yet. Say "save this layout as coding".'
+        if name == 'focus':
+            if not task.get('on'):
+                return choreo.focus_off()
+            # When a focus timer ends, the message is shown and spoken like any other result.
+            announce = lambda message: self.events.put((None, {"command": "feedback", "message": message}))
+            return choreo.focus_on(task.get('minutes'), on_end=announce)
+        if name == 'where':
+            return choreo.where(task['app'])
+        if name == 'workspace_info':
+            return choreo.on_workspace(task['workspace'])
+        others, names = choreo.close_others(task['keep'])
+        if not others:
+            return 'Nothing else is open on this workspace.'
+        self.confirm(f'Close {names}?', action='close_others', value=names)
+        return choreo.close(others)
 
     def hands_free_tool(self, name, task):
         """Numbered hints, scrolling, typing and keys; the browser when it's in front, any app otherwise."""

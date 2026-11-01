@@ -143,7 +143,7 @@ mode stays under ~3% in a quiet room.
 | 1c Everyday commands | done |
 | 1d Screen grid | planned (needs `ydotool`) |
 | 2 Hinglish | done: 11/12 spoken test commands (multilingual small), English unaffected |
-| 3 Window choreography | planned |
+| 3 Window choreography | done |
 | 4 Screen understanding | planned |
 | 5 MCP server | planned |
 | 6 Teach by doing | planned |

@@ -33,7 +33,7 @@ HINDI_NUMBERS = {'ek': 1, 'do': 2, 'teen': 3, 'char': 4, 'chaar': 4, 'paanch': 5
                  'gyarah': 11, 'gyaarah': 11, 'barah': 12, 'baarah': 12, 'terah': 13, 'chaudah': 14, 'pandrah': 15,
                  'solah': 16, 'satrah': 17, 'atharah': 18, 'unnis': 19, 'bees': 20, 'bis': 20}
 MARKER = re.compile(r'\b(?:' + '|'.join(V.values()) + r'|kitne|kitni|kya|kaun|aaj|awaaz|awaz|aawaz|gaane|gane|gaana|gana|'
-                    r'agla|pichla|neeche|niche|upar|wala|waala|ke\s+baare|ko|hai|hain)\b', re.I)
+                    r'agla|pichla|neeche|niche|upar|wala|waala|ke\s+baare|ko|hai|hain|karo|kar\s+do|liye|naam|rakho|mein|lagao)\b', re.I)
 
 
 def _num(word: str) -> str:
@@ -69,6 +69,14 @@ RULES: list[tuple[str, str]] = [
     (r'(?:likho|likh\s+do|type\s+karo)\s+(?P<text>.+)', 'type {text}'),
     (r'(?P<text>.+?)\s+' + V['type'], 'type {text}'),
     (r'(?:enter|tab|escape)\s+(?:dabao|daba\s+do|press\s+karo)', 'press {0}'),
+    # Focus mode and window layouts
+    (r'focus\s+mode\s+(?:chalu|on|start|shuru)\s+kar(?:o|\s*do)|(?:mujhe\s+)?focus\s+karna\s+hai', 'focus mode'),
+    (r'(?P<n>\d+|\w+)\s+minute\s+(?:ke\s+liye\s+)?focus\s+(?:mode\s+)?(?:chalu\s+)?kar(?:o|\s*do|na\s+hai)', 'focus for {n} minutes'),
+    (r'focus\s+mode\s+(?:band|off|khatam)\s+kar(?:o|\s*do)|focus\s+khatam', 'end focus mode'),
+    (r'(?P<a>.+?)\s+(?:left|baayein|baaye|bayen)\s+(?:mein|me|pe|par)\s+(?:aur\s+)?(?P<b>.+?)\s+(?:right|daayein|daaye|dayen)\s+(?:mein|me|pe|par)\s+(?:rakho|kar\s+do|lagao)',
+     '{a} on the left and {b} on the right'),
+    (r'(?:ye|yeh|is)?\s*layout\s+(?P<name>[\w-]+)\s+(?:naam\s+se\s+)?(?:save\s+kar(?:o|\s*do)|yaad\s+rakho)', 'save this layout as {name}'),
+    (r'(?P<name>[\w-]+)\s+(?:wala\s+|waala\s+)?layout\s+(?:lagao|laga\s+do|kholo|load\s+karo)', 'restore {name} layout'),
     # Screenshots, themes, windows, workspaces
     (r'(?:ek\s+)?screenshot\s+' + V['take'], 'take a screenshot'),
     (r'(?P<theme>halloween|diwali|minecraft|omarchy|liquid)\s+(?:wala\s+|waala\s+)?(?:theme\s+)?(?:lagao|laga\s+do|kar\s+do|set\s+karo|chalu\s+karo)', 'switch to the {theme} theme'),
@@ -207,6 +215,12 @@ def translate(text: str) -> str | None:
         text = _loanwords(transliterate(text))
     if not is_hinglish(text):
         return None
+    # One command unless "aur/phir" joins two; "X left mein aur Y right mein" is still one.
+    one_command = not CLAUSE_JOIN.search(text) or re.search(
+        r'\b(?:left|baayein|baaye|bayen)\b.+\b(?:right|daayein|daaye|dayen)\b', text, re.I)
+    whole = _clause(text) if one_command else None
+    if whole:
+        return whole
     clauses = CLAUSE_JOIN.split(text.strip())
     english = [_clause(c) for c in clauses]
     if not any(english):
@@ -229,7 +243,8 @@ NAMES = {
     'obsidian': 'ऑब्सिडियन', 'chrome': 'क्रोम', 'brave': 'ब्रेव', 'search': 'सर्च', 'page': 'पेज', 'numbers': 'नंबर्स',
     'number': 'नंबर', 'wallpaper': 'वॉलपेपर', 'timer': 'टाइमर', 'trash': 'ट्रैश', 'pdf': 'पीडीएफ़', 'wikipedia': 'विकिपीडिया',
     'subscribe': 'सब्सक्राइब', 'next': 'नेक्स्ट', 'button': 'बटन', 'link': 'लिंक', 'blok': 'ब्लॉक', 'block': 'ब्लॉक',
-    'pewdiepie': 'प्यूडीपाई', 'the': 'द', 'on': 'ऑन', 'of': 'ऑफ़', 'and': 'एंड', 'my': 'माय', 'new': 'न्यू', 'tab': 'टैब',
+    'pewdiepie': 'प्यूडीपाई', 'coding': 'कोडिंग', 'gaming': 'गेमिंग', 'work': 'वर्क', 'study': 'स्टडी', 'focus': 'फ़ोकस',
+    'layout': 'लेआउट', 'discord': 'डिस्कॉर्ड', 'slack': 'स्लैक', 'telegram': 'टेलीग्राम', 'firefox': 'फ़ायरफ़ॉक्स', 'the': 'द', 'on': 'ऑन', 'of': 'ऑफ़', 'and': 'एंड', 'my': 'माय', 'new': 'न्यू', 'tab': 'टैब',
 }
 _VOWEL_SIGNS = [('aa', 'ा', 'आ'), ('ai', 'ै', 'ऐ'), ('au', 'ौ', 'औ'), ('ee', 'ी', 'ई'), ('oo', 'ू', 'ऊ'), ('ou', 'ौ', 'औ'),
                 ('a', '', 'अ'), ('i', 'ि', 'इ'), ('u', 'ु', 'उ'), ('e', 'े', 'ए'), ('o', 'ो', 'ओ'), ('y', 'ी', 'ई')]
@@ -321,6 +336,11 @@ REPLIES = [
     (r'Hands-free is on\..*', lambda m: 'हैंड्स फ़्री चालू है। ब्लॉक बोलकर कुछ भी कहिए'),
     (r'Hands-free is off\.', lambda m: 'हैंड्स फ़्री बंद कर दिया'),
     (r'Yes\?', lambda m: 'जी?'),
+    (r'Focus mode on: .*', lambda m: 'फ़ोकस मोड चालू है, नोटिफ़िकेशन बंद कर दिए'),
+    (r'Focus (?:mode off|time is over) after (?P<n>\d+) minutes\..*', lambda m: f'फ़ोकस मोड बंद, {m["n"]} मिनट हुए'),
+    (r'Saved (?P<n>\d+) windows? as (?P<x>.+)', lambda m: f'{m["n"]} विंडो {_name(m["x"])} नाम से सेव कर दीं'),
+    (r'Restored (?P<x>[^:]+):.*', lambda m: f'{_name(m["x"])} लेआउट लगा दिया'),
+    (r'(?P<a>\S+) on the left, (?P<b>\S+) on the right.*', lambda m: f'{_name(m["a"])} बाईं तरफ़, {_name(m["b"])} दाईं तरफ़'),
 ]
 
 

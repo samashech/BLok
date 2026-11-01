@@ -39,6 +39,10 @@ AREAS = {
         'Set the volume to a level': 'volume_set', 'Brightness up': 'brightness_up',
         'Brightness down': 'brightness_down', 'Lock the screen': 'lock', 'Change the theme': 'theme',
     },
+    'Focus and window layouts': {
+        'Put two apps side by side': 'arrange', 'Save the window layout': 'layout_save',
+        'Restore a saved window layout': 'layout_restore', 'Start focus mode': 'focus_on', 'End focus mode': 'focus_off',
+    },
     'Notes': {'Create a note': 'note_create', 'Write in the note': 'note_write', 'Open notes': 'notes_open'},
     'Camera': {'Open camera': 'camera_open', 'Take a photo': 'photo'},
     'Questions about time, date or battery': {
@@ -46,7 +50,7 @@ AREAS = {
     },
 }
 # Laya-routed actions that change state get an approval card unless Laya is sure.
-RISKY = {'file_rename', 'file_copy', 'file_delete', 'file_append', 'file_create', 'window_close', 'lock', 'download'}
+RISKY = {'file_rename', 'file_copy', 'file_delete', 'file_append', 'file_create', 'window_close', 'lock', 'download', 'layout_restore'}
 
 NUMBERS = {w: i for i, w in enumerate('zero one two three four five six seven eight nine ten eleven twelve '
                                       'thirteen fourteen fifteen sixteen seventeen eighteen nineteen'.split())}
@@ -93,7 +97,11 @@ def label(task: dict) -> str:
         'window': {'close': 'Close the active window', 'fullscreen': 'Toggle fullscreen', 'float': 'Toggle floating',
                    'move': f'Move window to workspace {task.get("workspace")}',
                    'focus': f'Switch to {task.get("app")}'}.get(task.get('op'), 'Window'),
-        'plugin': _plugin_label(task), 'lock': 'Lock the screen', 'theme': f'Switch to the {task.get("name")} theme', 'answer': f'Tell the {task.get("topic")}',
+        'plugin': _plugin_label(task), 'arrange': f'{task.get("left")} left, {task.get("right")} right',
+        'layout_save': f'Save layout {task.get("name")}', 'layout_restore': f'Restore layout {task.get("name")}',
+        'layout_list': 'List saved layouts', 'focus': 'Focus mode ' + ('on' if task.get('on') else 'off'),
+        'where': f'Find the {task.get("app")} window', 'workspace_info': f'What is on workspace {task.get("workspace")}',
+        'close_others': f'Close everything except {task.get("keep")}', 'lock': 'Lock the screen', 'theme': f'Switch to the {task.get("name")} theme', 'answer': f'Tell the {task.get("topic")}',
         'download': f'Download {task.get("url") or query}',
     }
     return labels.get(name, name)
@@ -125,6 +133,21 @@ def _clean_target(text: str) -> str:
 def extract(intent: str, text: str) -> Action | str:
     """Build the action for a chosen intent, or return a clarification question."""
     t = text.strip().strip('.!?')
+    if intent in ('arrange', 'layout_save', 'layout_restore', 'focus_on', 'focus_off'):
+        from blok import choreo
+        found = choreo.intent(t)
+        if found and found['tool'] in (intent, 'focus') and (intent != 'focus_off' or not found.get('on')):
+            return tool(**{'tool_name': found.pop('tool'), **found})
+        if intent == 'focus_on':
+            return tool('focus', on=True, minutes=number(t) if re.search(r'\bminutes?\b', t, re.I) else None)
+        if intent == 'focus_off':
+            return tool('focus', on=False)
+        if intent == 'layout_restore':
+            name = next((n for n in choreo.layouts() if re.search(rf'\b{re.escape(n.replace("-", " "))}\b', t, re.I)), None)
+            return tool('layout_restore', name=name) if name else 'Which layout? Say "list my layouts" to hear them.'
+        if intent == 'arrange':
+            return 'Say it like "code on the left, browser on the right".'
+        return 'What should I call this layout? Say "save this layout as coding".'
     if intent.startswith('plugin:'):
         from blok import plugins
         item = plugins.commands().get(intent.split(':', 1)[1])

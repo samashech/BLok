@@ -705,6 +705,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             action_kind="tool", action_value=json.dumps({"tool": "plugin", "name": item.name, "args": args}),
         )
 
+    # Window choreography: arrange apps, saved setups, focus mode, window questions
+    from blok import choreo
+    arranged = choreo.intent(norm)
+    if arranged:
+        return ResolvedIntent(intent_type="windows:" + arranged["tool"], entities=arranged, confidence=0.95,
+                              raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(arranged))
+
     # 11b. Desktop tools: files, volume, brightness, media, windows, questions, downloads
     from blok.router import match_rule
     tool_match = match_rule(norm)

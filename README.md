@@ -54,6 +54,21 @@ You don't need to phrase things properly. Fillers, stutters, slang and mid-sente
 
 Anything that changes or deletes something, or that BLoK isn't sure about, shows an approval card first. Say “yes” or press Enter to approve; say “no” or press Esc to cancel.
 
+## Your windows, by voice
+
+BLoK speaks Hyprland, so it can arrange your desktop, not just open apps.
+
+| Say | Does |
+|---|---|
+| “code on the left, browser on the right” | puts both side by side on a free workspace |
+| “save this layout as coding” … later “coding mode” | remembers every window's app, workspace and position, then restores it, reopening apps that were closed |
+| “focus for 25 minutes” · “deep work” | silences notifications and hides chat apps (Discord, Slack, Telegram…) until the timer ends or you say “I'm done” |
+| “where's my terminal?” · “what's on workspace 3?” | tells you |
+| “close everything except code” | closes the rest of this workspace, after you approve the list |
+| “list my layouts” | names your saved setups |
+
+Layouts live in `~/.config/blok/layouts/` as plain JSON you can edit. Focus mode hides apps matching `BLOK_FOCUS_HIDE` (a regex of window classes) and puts everything back exactly where it was. In Hinglish: “focus mode chalu karo”, “code left mein aur browser right mein rakho”, “coding layout lagao”.
+
 ## Hinglish
 
 BLoK understands everyday Hinglish and answers the same way, in a Hindi voice:
