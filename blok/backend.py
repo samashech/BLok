@@ -180,7 +180,8 @@ class Backend:
         from blok.speech import new_session
         self.stop()
         generation = self.generation
-        voice = new_session()
+        # The mic level drives the orb, so you can see BLoK hearing you.
+        voice = new_session(on_level=lambda value: self.events.put((generation, {"type": "level", "value": value})))
         try:
             voice.start()
         except Exception:
@@ -188,7 +189,7 @@ class Backend:
             raise
         self.voice = voice
         self.listening = True
-        self.status("listening", voice.model + " · local · click mic again to finish")
+        self.status("listening", "Listening… I'll stop when you pause")
         def watch():
             try:
                 text = voice.wait(lambda: generation == self.generation,
@@ -204,6 +205,8 @@ class Backend:
     def finish_recording(self):
         if self.voice is not None:
             self.voice.finish()
+            if getattr(self.voice, 'heard_speech', True) is False:
+                return   # a tap before speaking: keep listening until the pause
             self.listening = False
             self.status("processing", "Transcribing locally…")
             self.emit(type="activity", state="transcribing", message="Whisper is transcribing locally…")
@@ -1429,11 +1432,15 @@ class Backend:
                     elif event["type"] == "action_done":
                         self.actions_pending=max(0,self.actions_pending-1)
                         self.emit(type="activity",state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
+                    elif event["type"] == "level":
+                        if self.listening:
+                            self.emit(type="level", value=event["value"])
                     elif event["type"] == "understood":
                         self.emit(type="understood", text=event["text"], model=event["model"])
                         self.emit(type="activity", state="thinking", message=f"Understood: “{event['text']}” · Laya is checking…")
                     elif event["type"] == "speech_busy":
                         self.listening = False
+                        self.emit(type="level", value=0)
                         self.status("processing", "Transcribing locally…")
                         self.emit(type="activity", state="transcribing", message="Whisper is transcribing locally…")
                     elif event["type"] == "speech_text":
@@ -1444,7 +1451,7 @@ class Backend:
                         if event["text"]:
                             self.transcript(event["text"], True)
                         else:
-                            self.emit(type="action", error=True, message="I didn't catch that. Hold Ctrl+. and try again.")
+                            self.emit(type="action", error=True, message="I didn't hear anything. Tap the mic or press Ctrl+. and speak.")
                     elif event["type"] == "error":
                         self.stop()
                         self.status("error", event["message"])

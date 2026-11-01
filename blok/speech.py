@@ -223,18 +223,68 @@ def warm_up():
     threading.Thread(target=run, daemon=True).start()
 
 
+class Endpointer:
+    """Frame by frame (30 ms), decides when speech starts and when it has ended.
+
+    It follows the room's noise floor slowly, counts a run of loud frames as the
+    start of speech, and a run of quiet frames after that as its end, like a
+    phone assistant that stops listening when you pause.
+    """
+    FRAME_SECONDS = 0.03
+
+    def __init__(self, end_seconds: float = 0.7):
+        self.floor = 0.002
+        self.level = 0.0
+        self.end_frames = max(1, round(end_seconds / self.FRAME_SECONDS))
+        self.reset()
+
+    def reset(self):
+        self.speaking, self.voiced, self.silent = False, 0, 0
+
+    def feed(self, frame) -> str:
+        """'start' when speech begins, 'end' when it has ended, '' otherwise."""
+        import numpy
+        self.level = float(numpy.sqrt((frame ** 2).mean()))
+        loud = self.level > max(self.floor * 3, 0.004)
+        if not loud:
+            self.floor = self.floor * 0.995 + self.level * 0.005
+        if not self.speaking:
+            self.voiced = self.voiced + 1 if loud else 0
+            if self.voiced >= 3:
+                self.speaking, self.silent = True, 0
+                return 'start'
+            return ''
+        self.silent = 0 if loud else self.silent + 1
+        if self.silent >= self.end_frames:
+            self.reset()
+            return 'end'
+        return ''
+
+
 class WhisperSession:
-    """Record with pw-record until finish(), then transcribe locally with Whisper."""
-    MAX_SECONDS = 120
+    """Listen from a tap (or while Ctrl+. is held) and stop by itself when you pause.
+
+    PipeWire streams 16 kHz audio into memory; the endpointer ends the recording
+    about a second after you stop talking, gives up if nothing is said, and a
+    manual stop still works. Nothing is written to disk.
+    """
+    FRAME = 480
+    MAX_SECONDS = 60
+    NO_SPEECH_SECONDS = 7.0
     TAIL_SECONDS = 0.3
 
-    def __init__(self):
+    def __init__(self, on_level=None):
         self.lock = threading.RLock()
-        self.directory = None
-        self.path = None
         self.process = None
+        self.frames = []
         self.stopped = threading.Event()
+        self.reader_done = threading.Event()
         self.cancelled = False
+        self.heard_speech = False
+        self.auto_stopped = False
+        self.tail_until = 0.0
+        self.on_level = on_level
+        self.end_silence = float(os.environ.get('BLOK_END_SILENCE', '1.0'))
         try:
             self.model = 'Whisper ' + Path(whisper_model_path()).name.removeprefix('whisper-')
         except RuntimeError:
@@ -244,85 +294,101 @@ class WhisperSession:
             raise RuntimeError('pw-record (PipeWire) is needed to use the microphone.')
 
     def start(self):
-        self.directory = tempfile.TemporaryDirectory(prefix='blok-voice-', dir=os.environ.get('XDG_RUNTIME_DIR', '/tmp'))
-        self.path = Path(self.directory.name) / 'speech.wav'
         self.started = time.monotonic()
-        self.process = subprocess.Popen([self.recorder, '--rate', '16000', '--channels', '1', '--format', 's16', str(self.path)],
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        time.sleep(.15)
+        self.process = subprocess.Popen([self.recorder, '--rate', '16000', '--channels', '1', '--format', 's16', '-'],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(.1)
         if self.process.poll() is not None:
             error = self.process.stderr.read().decode(errors='replace').strip()[:200]
             raise RuntimeError('The microphone could not start: ' + (error or 'pw-record exited'))
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        import numpy
+        endpointer = Endpointer(self.end_silence)
+        try:
+            while True:
+                chunk = self.process.stdout.read(self.FRAME * 2)
+                if len(chunk) < self.FRAME * 2:
+                    break
+                frame = numpy.frombuffer(chunk, dtype='<i2').astype('float32') / 32768.0
+                self.frames.append(frame)
+                event = endpointer.feed(frame)
+                now = time.monotonic()
+                if self.on_level and len(self.frames) % 3 == 0:   # about 11 updates a second
+                    self.on_level(min(1.0, endpointer.level * 8))
+                if event == 'start':
+                    self.heard_speech = True
+                if self.stopped.is_set():
+                    if now >= self.tail_until:   # a manual stop keeps a short tail
+                        break
+                    continue
+                if event == 'end' and self.heard_speech:
+                    self.auto_stopped = True     # you paused: that's the end of the command
+                    self.stopped.set()
+                    break
+                if (not self.heard_speech and now - self.started > self.NO_SPEECH_SECONDS) or now - self.started > self.MAX_SECONDS:
+                    self.stopped.set()
+                    break
+        finally:
+            self.reader_done.set()
 
     def state(self):
-        if self.process is None:
-            return 'idle'
-        return 'recording' if self.process.poll() is None else 'idle'
-
-    def _stop_recorder(self):
-        if self.process and self.process.poll() is None:
-            self.process.send_signal(signal.SIGINT)  # lets pw-record finish the WAV header
-            try:
-                self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
+        return 'recording' if self.process is not None and not self.stopped.is_set() and self.process.poll() is None else 'idle'
 
     def finish(self):
-        # The recorder keeps running for a short tail in wait(), so the last
-        # word isn't clipped when the key is released mid-syllable.
+        # Releasing Ctrl+. (or tapping the mic) before speaking means "tap to talk":
+        # keep listening and stop on the pause. After speech, it stops now, with a
+        # short tail so a word cut mid-syllable isn't lost. × cancels either way.
+        if not self.heard_speech:
+            return
+        self.tail_until = time.monotonic() + self.TAIL_SECONDS
         self.stopped.set()
 
     def cancel(self):
         with self.lock:
             self.cancelled = True
-            if self.process and self.process.poll() is None:
-                self.process.kill()
-                self.process.wait()
+            self._kill()
             self.stopped.set()
 
+    def _kill(self):
+        if self.process and self.process.poll() is None:
+            self.process.kill()
+            self.process.wait()
+
     def wait(self, alive, on_busy):
-        """Block until finish(), then return the transcript; None if cancelled."""
+        """Block until you pause (or stop), then return the transcript; None if cancelled."""
         while not self.stopped.wait(.1):
             if not alive():
                 return None
             if self.process.poll() is not None:
                 break  # recorder died (device unplugged): transcribe what we have
-            if time.monotonic() - self.started > self.MAX_SECONDS:
-                self.finish()
         if self.cancelled or not alive():
             return None
-        time.sleep(self.TAIL_SECONDS)
+        self.reader_done.wait(timeout=self.TAIL_SECONDS + 1)
         with self.lock:
             if self.cancelled:
                 return None
-            self._stop_recorder()
-        on_busy()
-        import soundfile
-        try:
-            audio, rate = soundfile.read(str(self.path), dtype='float32')
-        except (RuntimeError, OSError):
+            self._kill()
+        if not self.heard_speech:
             return ''
-        if getattr(audio, 'ndim', 1) > 1:
-            audio = audio.mean(axis=1)
+        on_busy()
+        import numpy
+        audio = numpy.concatenate(self.frames) if self.frames else numpy.zeros(0, dtype='float32')
         if os.environ.get('BLOK_KEEP_AUDIO') == '1':
-            shutil.copyfile(self.path, Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'blok-last.wav')
-        if rate != 16000 or len(audio) < 16000 * 0.3:
+            import soundfile
+            soundfile.write(str(Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'blok-last.wav'), audio, 16000)
+        if len(audio) < 16000 * 0.3:
             return ''
         return transcribe(audio)
 
     def close(self):
         with self.lock:
-            if self.process and self.process.poll() is None:
-                self.process.kill()
-                self.process.wait()
-            if self.directory:
-                self.directory.cleanup()
-                self.directory = None
+            self._kill()
 
 
-def new_session():
-    return VoxtypeSession() if os.environ.get('BLOK_STT') == 'voxtype' else WhisperSession()
+def new_session(on_level=None):
+    return VoxtypeSession() if os.environ.get('BLOK_STT') == 'voxtype' else WhisperSession(on_level=on_level)
 
 
 # Whisper's spellings of "BLoK"; the bare name must open the utterance.
@@ -368,28 +434,24 @@ class HandsFreeListener:
         import collections
         import numpy
         pre_roll = collections.deque(maxlen=10)          # 300 ms before speech starts
-        floor, voiced_run, silent_run, segment = 0.002, 0, 0, None
+        endpointer, segment = Endpointer(0.7), None
         while self.running:
             chunk = self.process.stdout.read(self.FRAME * 2)
             if len(chunk) < self.FRAME * 2:
                 break
             frame = numpy.frombuffer(chunk, dtype='<i2').astype('float32') / 32768.0
-            level = float(numpy.sqrt((frame ** 2).mean()))
-            loud = level > max(floor * 3, 0.004)
-            if not loud:
-                floor = floor * 0.995 + level * 0.005    # follow the room's noise slowly
+            event = endpointer.feed(frame)
             if segment is None:
                 pre_roll.append(frame)
-                voiced_run = voiced_run + 1 if loud else 0
-                if voiced_run >= 3:
-                    segment, silent_run = list(pre_roll), 0
+                if event == 'start':
+                    segment = list(pre_roll)
                 continue
             segment.append(frame)
-            silent_run = 0 if loud else silent_run + 1
-            if silent_run >= 23 or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
+            if event == 'end' or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
                 audio = numpy.concatenate(segment)
-                segment, voiced_run = None, 0
+                segment = None
                 pre_roll.clear()
+                endpointer.reset()
                 if not self.paused():
                     self.handle(audio)
 

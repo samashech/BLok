@@ -273,7 +273,7 @@ ShellRoot {
                         Accessible.name: root.listening ? "Finish recording and run command" : root.busy ? "Cancel pending actions" : "Start recording"
                         MouseArea { id: micMouse; anchors.fill: parent; hoverEnabled: true; onClicked: root.toggleMic() }
                         ToolTip.visible: root.opened && surface.reveal > 0.99 && (micMouse.containsMouse)
-                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Finish recording · Ctrl+." : "Cancel") : "Record · Ctrl+."
+                        ToolTip.text: root.listening || root.busy ? (root.listening ? "Stop now (I also stop when you pause)" : "Cancel") : "Tap and speak · Ctrl+."
                     }
                     ToolButton {
                         text: "×"; font.family: root.theme.font; font.pixelSize: 19; implicitWidth: 20; implicitHeight: 28; leftPadding: 0; rightPadding: 0
@@ -286,7 +286,7 @@ ShellRoot {
                     visible: root.expanded
                     Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 8
                     Layout.preferredHeight: 38
-                    text: root.transcript || (root.listening ? "Speak, then click mic to run · Whisper" : root.message)
+                    text: root.transcript || (root.listening ? "Speak — I'll stop when you pause" : root.message)
                     color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: 13
                     wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                 }

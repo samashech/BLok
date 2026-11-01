@@ -2,7 +2,7 @@
 
 **An offline Jarvis for Hyprland: it hears you, sees your screen, clicks, and talks back. No cloud, no API keys.**
 
-Hold <kbd>Ctrl</kbd>+<kbd>.</kbd>, talk the way you normally talk, let go. BLoK opens apps and sites, searches, plays music and videos, finds and edits your files, controls windows, volume and brightness, clicks the button you're pointing at, and tells you what it did. Speech recognition, decisions and the voice all run on your own computer.
+Tap <kbd>Ctrl</kbd>+<kbd>.</kbd> (or the mic) and talk the way you normally talk. BLoK stops listening by itself when you pause, like a phone assistant, so there's nothing to hold or click again. Holding the key while you speak works too. BLoK opens apps and sites, searches, plays music and videos, finds and edits your files, controls windows, volume and brightness, clicks the button you're pointing at, and tells you what it did. Speech recognition, decisions and the voice all run on your own computer.
 
 <p align="center">
   <img src="docs/images/theme-omarchy.png" width="420" alt="BLoK in the Omarchy theme"><br>
@@ -193,9 +193,12 @@ Ctrl+. ─► Whisper (local) ─► speech cleanup ─► rules ─────
 | `BLOK_KOKORO_VOICE` / `BLOK_KOKORO_SPEED` | Voice (`af_heart`, `am_michael`, `bm_george`, …) and pace |
 | `BLOK_TTS=0` | Silence spoken replies (`blok voice off` does the same) |
 | `BLOK_REPHRASE=0` / `BLOK_REPHRASE_MODEL` | Turn off or choose the Ollama rephraser |
+| `BLOK_END_SILENCE` | Pause (seconds, default 1.0) that ends a command |
 | `BLOK_STT=voxtype` | Use a running Voxtype daemon instead of built-in Whisper |
 | `BLOK_HOME` / `BLOK_DATA` | Where models, the Python environment and your data live |
 | `BLOK_REDUCED_MOTION=1` | No reveal or ring animation |
+
+BLoK ends a recording about a second after you stop talking; set `BLOK_END_SILENCE` (seconds) if it cuts you off mid-thought or waits too long. If you say nothing, it gives up after 7 seconds. While you talk, the orb follows your voice.
 
 Names Whisper gets wrong (artists, games, friends) go one per line in `~/.config/blok/words.txt`. If recognition is poor, run `blok mic-test`: it shows your input level and exactly what Whisper heard.
 

@@ -46,51 +46,88 @@ class VoxtypeTests(unittest.TestCase):
 
 
 class WhisperSessionTests(unittest.TestCase):
-    def wav(self, seconds):
-        import numpy, soundfile
-        self.temp = tempfile.TemporaryDirectory()
-        path = Path(self.temp.name) / 'speech.wav'
-        soundfile.write(str(path), numpy.zeros(int(16000 * seconds), dtype='float32'), 16000)
-        return path
+    """Tap-to-talk with automatic end-of-speech, on synthetic audio."""
 
-    def session(self, path):
+    def stream(self, *parts):
+        import numpy
+        rng = numpy.random.default_rng(0)
+        audio = []
+        for kind, seconds in parts:
+            n = int(16000 * seconds)
+            audio.append(numpy.sin(numpy.arange(n) / 6) * 0.2 if kind == 'voice' else rng.standard_normal(n) * 0.001)
+        return (numpy.concatenate(audio) * 32767).astype('<i2').tobytes()
+
+    def session(self, data, **kw):
+        import io
         from blok.speech import WhisperSession
         with patch('blok.speech.shutil.which', return_value='/usr/bin/pw-record'):
-            voice = WhisperSession()
-        voice.path = path
-        voice.started = 0
-        voice.process = Mock()
-        voice.process.poll.return_value = 0
+            voice = WhisperSession(**kw)
+        voice.process = Mock(stdout=io.BytesIO(data))
+        voice.process.poll.return_value = None
+        voice.started = __import__('time').monotonic()
         return voice
 
-    def test_finished_recording_is_transcribed_locally(self):
-        voice = self.session(self.wav(1.0))
-        voice.stopped.set()
+    def test_stops_by_itself_when_you_pause(self):
+        voice = self.session(self.stream(('noise', 0.5), ('voice', 1.0), ('noise', 2.0), ('voice', 1.0)))
+        voice._read()
+        self.assertTrue(voice.stopped.is_set() and voice.auto_stopped and voice.heard_speech)
+        seconds = len(voice.frames) * 0.03
+        self.assertAlmostEqual(seconds, 0.5 + 1.0 + 1.0, delta=0.2)   # the later speech isn't included
+
+    def test_gives_up_when_nothing_is_said(self):
+        voice = self.session(self.stream(('noise', 3.0)))
+        voice.NO_SPEECH_SECONDS = 0.0
+        voice._read()
+        self.assertTrue(voice.stopped.is_set())
+        self.assertFalse(voice.heard_speech)
+        with patch('blok.speech.transcribe') as transcribe:
+            self.assertEqual(voice.wait(lambda: True, Mock()), '')
+        transcribe.assert_not_called()
+
+    def test_a_tap_before_speaking_keeps_listening(self):
+        voice = self.session(self.stream(('noise', 0.5), ('voice', 1.0), ('noise', 1.2)))
+        voice.finish()                          # Ctrl+. released before saying anything
+        self.assertFalse(voice.stopped.is_set())
+        voice._read()
+        self.assertTrue(voice.auto_stopped and voice.heard_speech)
+
+    def test_manual_stop_keeps_a_short_tail(self):
+        voice = self.session(self.stream(('voice', 0.5), ('voice', 2.0)))
+        voice.heard_speech = True
+        voice.finish()
+        voice.tail_until = float('inf')         # read everything that's left
+        voice._read()
+        self.assertFalse(voice.auto_stopped)
+        self.assertAlmostEqual(len(voice.frames) * 0.03, 2.5, delta=0.1)
+
+    def test_transcribes_what_was_heard_and_reports_levels(self):
+        levels = []
+        voice = self.session(self.stream(('noise', 0.3), ('voice', 1.0), ('noise', 1.2)), on_level=levels.append)
+        voice._read()
         busy = Mock()
         with patch('blok.speech.transcribe', return_value='open the terminal') as transcribe:
             self.assertEqual(voice.wait(lambda: True, busy), 'open the terminal')
         busy.assert_called_once()
-        self.assertEqual(transcribe.call_args[0][0].shape, (16000,))
+        self.assertGreater(len(transcribe.call_args[0][0]), 16000)
+        self.assertTrue(levels and max(levels) > 0.5)
 
-    def test_too_short_or_cancelled_recording_runs_nothing(self):
-        voice = self.session(self.wav(0.1))
-        voice.stopped.set()
+    def test_cancelled_recording_runs_nothing(self):
+        voice = self.session(self.stream(('voice', 1.0), ('noise', 1.2)))
+        voice._read()
+        voice.cancel()
         with patch('blok.speech.transcribe') as transcribe:
-            self.assertEqual(voice.wait(lambda: True, Mock()), '')
-            voice.cancelled = True
             self.assertIsNone(voice.wait(lambda: True, Mock()))
         transcribe.assert_not_called()
 
-    def test_recorder_command_is_16k_mono(self):
+    def test_recorder_streams_16k_mono_to_memory(self):
         from blok.speech import WhisperSession
         with patch('blok.speech.shutil.which', return_value='/usr/bin/pw-record'), \
-             patch('blok.speech.subprocess.Popen') as popen, patch('blok.speech.time.sleep'):
+             patch('blok.speech.subprocess.Popen') as popen, patch('blok.speech.time.sleep'), \
+             patch('blok.speech.threading.Thread'):
             popen.return_value.poll.return_value = None
             voice = WhisperSession()
             voice.start()
-        args = popen.call_args[0][0]
-        self.assertEqual(args[:7], ['/usr/bin/pw-record', '--rate', '16000', '--channels', '1', '--format', 's16'])
-        voice.close()
+        self.assertEqual(popen.call_args[0][0], ['/usr/bin/pw-record', '--rate', '16000', '--channels', '1', '--format', 's16', '-'])
 
     def test_voxtype_only_when_chosen(self):
         from blok import speech
