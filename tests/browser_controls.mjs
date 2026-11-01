@@ -104,4 +104,23 @@ try{
  await page.evaluate(pageAction,{op:'site_search',query:'phantom blade'});
  await page.waitForURL('**/find?term=phantom+blade');
  console.log('PASS: click what the mouse points at (and refuse plain text), on-page site search');
+ await page.setContent(`<div style="height:3000px"><a href="https://example.com/a">Alpha</a> <button id=b onclick="this.dataset.clicked='yes'">Beta</button> <input id=f placeholder="Name"><a href="#"><span>Nested</span></a></div>`);
+ const shown=await page.evaluate(pageAction,{op:'hints'});
+ assert.equal(shown.count,4);
+ assert.equal(await page.evaluate(()=>!!document.getElementById('__blok_hints')),true);
+ const second=await page.evaluate(pageAction,{op:'hint',n:2});
+ assert.equal(second.name,'Beta');
+ assert.equal((await page.evaluate(pageAction,{op:'hint',n:1})).href,'https://example.com/a');
+ assert.equal((await page.evaluate(pageAction,{op:'hint',n:3})).editable,true);
+ await page.evaluate(pageAction,{op:'click',control:second.control,page:second.page});
+ assert.equal(await page.locator('#b').getAttribute('data-clicked'),'yes');
+ await assert.rejects(page.evaluate(pageAction,{op:'hint',n:9}),/no number 9/);
+ await page.locator('#b').evaluate(e=>e.textContent='Changed');
+ await assert.rejects(page.evaluate(pageAction,{op:'hint',n:2}),/changed/);
+ await page.evaluate(pageAction,{op:'scroll',direction:'down'});
+ await page.waitForFunction(()=>scrollY>100);
+ assert.equal(await page.evaluate(()=>!!document.getElementById('__blok_hints')),false);
+ await page.evaluate(pageAction,{op:'hints',show:false});
+ await assert.rejects(page.evaluate(pageAction,{op:'hint',n:1}),/Say "show numbers"/);
+ console.log('PASS: numbered hints (labels, lookup, stale refusal, clear on scroll) and scrolling');
 }finally{await browser.close();}

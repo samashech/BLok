@@ -104,6 +104,10 @@ class Speaker:
             return chosen
         return 'elevenlabs' if api_key() else 'kokoro' if kokoro_available() else 'local'
 
+    def speaking(self) -> bool:
+        player = self.player
+        return bool(player and player.poll() is None)
+
     def stop(self):
         with self.lock:
             self.generation += 1
@@ -111,7 +115,9 @@ class Speaker:
         if player and player.poll() is None:
             player.terminate()
 
-    def say(self, text: str):
+    def say(self, text: str, voice: str | None = None, lang: str | None = None):
+        """Speak `text`; `voice`/`lang` apply to this reply only (Hindi replies: an hf_/hm_ voice and lang 'hi')."""
+        self.next_voice, self.next_lang = voice, lang
         text = (text or '').strip()
         mode = self.mode()
         if not text or mode == 'off':
@@ -163,14 +169,17 @@ class Speaker:
 
     def _local(self, text, generation):
         command = os.environ.get('BLOK_TTS_CMD')
-        args = command.split() + [text] if command else (['espeak-ng', '-s', '165', text] if shutil.which('espeak-ng') else None)
+        espeak = ['espeak-ng', '-s', '165'] + (['-v', 'hi'] if getattr(self, 'next_lang', None) == 'hi' else [])
+        args = command.split() + [text] if command else (espeak + [text] if shutil.which('espeak-ng') else None)
         if args:
             self._start(args, generation)
 
     def _kokoro(self, text, generation):
         import soundfile
         speed = float(os.environ.get('BLOK_KOKORO_SPEED', '1.05'))
-        samples, rate = kokoro().create(text, voice=self.kokoro_voice(), speed=speed, lang='en-us')
+        voice = getattr(self, 'next_voice', None) or self.kokoro_voice()
+        lang = getattr(self, 'next_lang', None) or 'en-us'
+        samples, rate = kokoro().create(text, voice=voice, speed=speed if lang == 'en-us' else 1.0, lang=lang)
         if not self._current(generation):
             return
         player = shutil.which('pw-play') or shutil.which('paplay') or shutil.which('aplay')

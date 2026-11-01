@@ -59,6 +59,7 @@ class Backend:
         self.laya = None
         # Only the running app probes the desktop and browser; tests and scripts don't.
         self.live = False
+        self.hands_free = None
         from blok.voice import Speaker
         # Silent until main() runs, so tests and scripts never talk.
         self.speaker = Speaker(DATA / 'settings.json', on_notice=lambda message: self.emit(type="engine", message=message), enabled=False)
@@ -76,8 +77,7 @@ class Backend:
         if event.get("type") == "action" and getattr(self.worker_context, "in_plan", False):
             self.plan_messages.append(event.get("message", ""))
         elif event.get("type") == "action" and event.get("message"):
-            from blok.voice import spoken
-            self.speaker.say(spoken(event["message"], error=bool(event.get("error"))))
+            self.say_result(event["message"], error=bool(event.get("error")))
 
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
@@ -271,6 +271,15 @@ class Backend:
             steps=[dict(s) for s in timeline_steps],
         )
 
+    def say_result(self, message, error=False):
+        """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
+        from blok.voice import spoken
+        if getattr(self, 'reply_hinglish', False):
+            from blok import hinglish
+            self.speaker.say(hinglish.reply(message, error=error), voice=os.environ.get('BLOK_HINDI_VOICE', 'hf_alpha'), lang='hi')
+        else:
+            self.speaker.say(spoken(message, error=error))
+
     def execute_plan(self, plan):
         self.worker_context.in_plan = True
         self.plan_messages = []
@@ -278,11 +287,10 @@ class Backend:
             ok = self._execute_plan(plan)
         finally:
             self.worker_context.in_plan = False
-        from blok.voice import spoken
         said = [m for m in self.plan_messages if m]
         if said:
             summary = said[-1] if not ok else (', then '.join(said[-2:]) if len(said) > 1 else said[0])
-            self.speaker.say(spoken(summary, error=not ok))
+            self.say_result(summary, error=not ok)
         return ok
 
     def _execute_plan(self, plan):
@@ -481,6 +489,10 @@ class Backend:
                     message=result['message']
             elif kind in ("address", "browser_type", "browser_key"):
                 if kind=="browser_key" and value=="new tab":self.browser_task({'action':'new_tab'})
+                elif kind=="browser_key" and value=="enter":
+                    # Enter goes to whatever is in front, so hands-free use works in any app.
+                    from blok import system
+                    system.press('Return')
                 else:browser.control(kind, value)
                 message = {"address":"Address bar ready", "browser_type":"Typed in address bar", "browser_key":"Browser: " + value}[kind]
             elif kind == "open":
@@ -626,6 +638,8 @@ class Backend:
             return system.media(task['op'])
         if name == 'lock':
             return system.lock()
+        if name in ('hints', 'hint', 'scroll', 'type', 'key', 'handsfree'):
+            return self.hands_free_tool(name, task)
         if name == 'plugin':
             from blok import plugins
             item = plugins.commands().get(task.get('name', ''))
@@ -683,10 +697,90 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1')
+
+    def browser_in_front(self):
+        try:
+            return bool(browser.BROWSERS.fullmatch(json.loads(browser.run(['hyprctl', '-j', 'activewindow']) or '{}').get('class', '')))
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+            return False
+
+    def hands_free_tool(self, name, task):
+        """Numbered hints, scrolling, typing and keys; the browser when it's in front, any app otherwise."""
+        from blok import system
+        from blok.plans import SENSITIVE_WORDS
+        if name == 'handsfree':
+            return self.set_hands_free(bool(task.get('on')))
+        if name == 'key':
+            system.press(task['key'])
+            return 'Pressed ' + task['key'].lower()
+        in_browser = self.browser_in_front()
+        if name == 'type':
+            if in_browser and self.extension_version() == 'phase9-v1':
+                field = browser.request({'action': 'focused_field'})
+                if not field.get('editable'):
+                    raise RuntimeError('No text field is selected. Say "show numbers", then the field\'s number.')
+            system.type_text(task['text'])
+            return 'Typed ' + task['text'][:60]
+        if name == 'scroll':
+            if in_browser:
+                self.require_extension('Scrolling', 'phase9-v1')
+                browser.request({'action': 'scroll', 'direction': task['direction'], 'amount': task.get('amount', 'page')})
+            else:
+                key = {'down': 'Next', 'up': 'Prior', 'top': 'Home', 'bottom': 'End'}[task['direction']]
+                system.press({'down': 'Down', 'up': 'Up'}.get(task['direction'], key) if task.get('amount') == 'little' else key,
+                             3 if task.get('amount') == 'little' else 1)
+            self.context.hints_until = 0.0
+            return 'Scrolled ' + task['direction']
+        if not in_browser:
+            raise RuntimeError('Numbers work in the browser for now. Switch to it, or say a button\'s name.')
+        self.require_extension('Numbers', 'phase9-v1')
+        if name == 'hints':
+            result = browser.request({'action': 'hints', 'show': bool(task.get('show', True))})
+            self.context.hints_until = time.monotonic() + 120 if task.get('show', True) and result.get('count') else 0.0
+            if task.get('show', True) and not result.get('count'):
+                return 'Nothing clickable is visible here.'
+            return result.get('message', 'Done')
+        found = browser.request({'action': 'hint', 'n': int(task['n'])})
+        label = (found.get('name') or 'that').strip()[:80]
+        if task.get('new_tab'):
+            if not found.get('href'):
+                raise RuntimeError(f'Number {task["n"]} is not a link.')
+            browser.request({'action': 'open_tab', 'url': found['href']})
+            return f'Opened {label} in a new tab'
+        if SENSITIVE_WORDS.search(label):
+            self.confirm(f'Click "{label}"?', action='click', value=label)
+        result = browser.request({'action': 'click_observed', 'control': found['control'], 'page': found['page']})
+        self.context.hints_until = 0.0
+        self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
+        return f'Selected {label}. Say "type" and the text.' if found.get('editable') else f'Clicked {label}'
+
+    def set_hands_free(self, on, persist=True):
+        """Start or stop listening for "hey block" (Phase 1b)."""
+        from blok.speech import HandsFreeListener
+        if on and self.hands_free is None:
+            listener = HandsFreeListener(
+                on_command=lambda text: self.events.put((None, {"command": "hands_free_text", "text": text})),
+                on_wake=lambda: self.events.put((None, {"command": "hands_free_wake"})),
+                paused=lambda: self.voice is not None or self.speaker.speaking())
+            listener.start()
+            self.hands_free = listener
+        elif not on and self.hands_free is not None:
+            self.hands_free.stop()
+            self.hands_free = None
+        if persist:
+            settings = json.loads((DATA / 'settings.json').read_text()) if (DATA / 'settings.json').exists() else {}
+            settings['hands_free'] = bool(on)
+            DATA.mkdir(parents=True, exist_ok=True)
+            (DATA / 'settings.json').write_text(json.dumps(settings, indent=2) + "\n")
+        self.emit(type="handsfree", on=bool(on))
+        return 'Hands-free is on. Say "hey block" and a command.' if on else 'Hands-free is off.'
+
+    def extension_version(self):
+        return browser.ping().get('version')
 
     def require_extension(self, feature, minimum='phase7-v1'):
-        version = browser.ping().get('version')
+        version = self.extension_version()
         if version not in self.EXTENSION_VERSIONS[self.EXTENSION_VERSIONS.index(minimum):]:
             raise RuntimeError(f'{feature}: this needs the updated browser extension. Open brave://extensions, click Reload on '
                                f'BLoK, then reload the page (running: {version}).')
@@ -1044,6 +1138,13 @@ class Backend:
                 return
         if self.live:
             self.refresh_page_context()
+        # Hinglish ("YouTube pe Arijit ke gaane chalao") becomes the English the rules know.
+        from blok import hinglish
+        english = hinglish.translate(text)
+        self.reply_hinglish = english is not None
+        if english:
+            self.emit(type="understood", text=english, model="Hinglish")
+            text = english
         # Keep the speaker's casing: notes, file text and names are data.
         normalized = re.sub(r"\s+dot\s+(com|org|net)\b", r".\1", text, flags=re.I)
         normalized = re.sub(r"\s+\.", ".", normalized)
@@ -1098,6 +1199,11 @@ class Backend:
         self.speaker.enabled = True
         self.speaker.warm_up()
         self.live = True
+        try:
+            if json.loads((DATA / 'settings.json').read_text()).get('hands_free'):
+                self.set_hands_free(True, persist=False)
+        except (OSError, ValueError, RuntimeError):
+            pass
         if os.environ.get('BLOK_STT') != 'voxtype':
             from blok import speech
             speech.warm_up()
@@ -1125,6 +1231,14 @@ class Backend:
                         self.emit(type="engine", message=event["message"])
                         continue
                     if event.get("command") == "quit": break
+                    if event.get("command") == "hands_free_wake":
+                        self.emit(type="wake")
+                        self.speaker.say("Yes?")
+                        continue
+                    if event.get("command") == "hands_free_text":
+                        self.emit(type="wake")
+                        self.transcript(event["text"], True)
+                        continue
                     try: self.request(event)
                     except Exception as error: self.emit(type="action", error=True, message=str(error))
                 elif generation == self.generation:
@@ -1154,6 +1268,8 @@ class Backend:
                         self.status("error", event["message"])
         finally:
             self.stop()
+            if self.hands_free is not None:
+                self.hands_free.stop()
 
 if __name__ == "__main__":
     backend = Backend()

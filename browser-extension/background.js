@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase8-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase9-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -115,6 +115,16 @@ export async function run(req, progress=()=>{}) {
       }
       return result;
     }
+    if(['hints','hint','scroll','focused_field'].includes(task.action)) {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      const result=await page({op:task.action,...task});
+      return {...(typeof result==='object'?result:{}),verified:true,tabId:tab.id,url:tab.url};
+    }
+    if(task.action==='open_tab') {
+      if(!/^https?:\/\//.test(task.url||''))throw Error('That number is not a link.');
+      const created=await chrome.tabs.create({url:task.url,active:true});
+      return confirmed('Opened it in a new tab','New tab created',{tabId:created.id});
+    }
     if(task.action==='pointer') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
@@ -124,6 +134,7 @@ export async function run(req, progress=()=>{}) {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       await focus(tab);
       const result=await flow.act('Clicking it',()=>page({op:'click',control:task.control,page:task.page}));
+      await page({op:'hints',show:false}).catch(()=>{});
       return {...result,tabId:tab.id};
     }
     if(task.action==='site_search') {

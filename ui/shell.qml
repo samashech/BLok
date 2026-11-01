@@ -28,6 +28,7 @@ ShellRoot {
     property string timelinePlanId: ""
     property string timelineStatus: "idle"
     property var pendingApproval: null
+    property bool handsFree: false
     property bool hasApproval: pendingApproval !== null
     property bool expanded: typing || listening || busy || transcript !== "" || state === "error" || actionError || hasApproval || (timelineSteps && timelineSteps.length > 0)
     property string orbMode: engine.indexOf("loading") !== -1 ? "connecting" : busy ? ((activity === "executing" || activity === "acting" || activity === "verifying") ? "working" : "solving") : state === "loading" ? "connecting" : listening ? "listening" : "breathing"
@@ -65,6 +66,8 @@ ShellRoot {
             timelineSteps = event.steps || []
         }
         if (event.type === "approval_request") pendingApproval = event
+        if (event.type === "handsfree") handsFree = !!event.on
+        if (event.type === "wake") { opened = true; typing = false }
         if (event.type === "approval_resolved") pendingApproval = null
         if (event.type === "ui_control") { let result = event.window === "BLoK · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)
@@ -93,6 +96,7 @@ ShellRoot {
         function text(value: string): void { root.opened = true; root.send({command: "text", text: value}) }
         function appearance(name: string): void { root.send({command: "theme", name: name}) }
         function voice(mode: string): void { root.send({command: "voice", mode: mode}) }
+        function handsfree(state: string): void { root.send({command: "text", text: state === "on" ? "hands free on" : "hands free off"}) }
         function approve(approvalId: string): void { root.send({command: "approve", id: approvalId}) }
         function reject(approvalId: string): void { root.send({command: "reject", id: approvalId}) }
         function status(): string { return JSON.stringify({theme: root.theme.id, state: root.state, message: root.message, action: root.lastAction, backend: backend.running, notes: notes.visible, engine: root.engine, activity: root.activity, activityMessage: root.activityMessage, execution: root.lastExecution, orb: root.orbMode, reveal: surface.reveal, inferenceMs: root.inferenceMs, timelineSteps: root.timelineSteps, hasApproval: root.hasApproval}) }
@@ -184,7 +188,7 @@ ShellRoot {
                         RowLayout {
                             spacing: 6
                             Rectangle { width: 4; height: 4; radius: root.theme.pixelFrame ? 0 : 2; color: root.listening ? root.theme.success : (root.theme.dot || root.theme.muted) }
-                            Text { text: "BLOK  /  LAYA"; color: root.theme.muted; font.family: root.theme.font; font.pixelSize: 9; font.letterSpacing: 1.4 }
+                            Text { text: root.handsFree ? "BLOK  /  LAYA  ·  HANDS-FREE" : "BLOK  /  LAYA"; color: root.theme.muted; font.family: root.theme.font; font.pixelSize: 9; font.letterSpacing: 1.4 }
                         }
                         Text {
                             Layout.fillWidth: true

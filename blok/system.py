@@ -132,3 +132,18 @@ def answer(topic: str) -> str:
     if topic == 'battery':
         return battery()
     raise RuntimeError('Unsupported question')
+
+
+def press(key: str, times: int = 1) -> None:
+    """Send a key to whichever window has focus (hands-free mode)."""
+    if not re.fullmatch(r'[A-Za-z_]+', key):
+        raise RuntimeError('Unsupported key')
+    for _ in range(max(1, min(times, 20))):
+        run(['wtype', '-k', key])
+
+
+def type_text(text: str) -> None:
+    """Type literal text into the focused window; control characters are refused."""
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        raise RuntimeError('That text contains control characters.')
+    run(['wtype', '-s', '15', '--', text])

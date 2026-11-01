@@ -99,8 +99,9 @@ say "Speech recognition (Whisper, runs on your CPU):"
 say "  1) base.en    145 MB  fastest, least accurate$(installed "$M/whisper-base.en/model.bin")"
 say "  2) small.en   465 MB  ${bold}recommended${off}, ~1 s per command$(installed "$M/whisper-small.en/model.bin")"
 say "  3) medium.en  1.5 GB  best with accents, ~3 s per command$(installed "$M/whisper-medium.en/model.bin")"
+say "  4) small      465 MB  English ${bold}+ Hindi/Hinglish${off} (\"YouTube pe gaane chalao\")$(installed "$M/whisper-small/model.bin")"
 case "$PRESET" in minimal) w=1 ;; full) w=3 ;; *) w=$(ask "Choice [2]:" 2) ;; esac
-whisper=$( case "$w" in 1) echo base.en ;; 3) echo medium.en ;; *) echo small.en ;; esac )
+whisper=$( case "$w" in 1) echo base.en ;; 3) echo medium.en ;; 4) echo small ;; *) echo small.en ;; esac )
 whisper_mb=$( case "$whisper" in base.en) echo 145 ;; medium.en) echo 1500 ;; *) echo 465 ;; esac )
 say ""
 say "Voice replies:"

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Explicit online step: fetch an open-source Whisper model (faster-whisper format).
 
-Usage: download_whisper.py [base.en | small.en | medium.en]   (default small.en)
+Usage: download_whisper.py [base.en | small.en | medium.en | base | small | medium]   (default small.en;
+sizes without .en are multilingual, for Hindi/Hinglish)
 """
 from pathlib import Path
 import sys
@@ -11,7 +12,9 @@ sys.path.insert(0, str(ROOT))
 from blok.paths import MODELS  # noqa: E402
 
 SIZES = {'tiny.en': 'Systran/faster-whisper-tiny.en', 'base.en': 'Systran/faster-whisper-base.en',
-         'small.en': 'Systran/faster-whisper-small.en', 'medium.en': 'Systran/faster-whisper-medium.en'}
+         'small.en': 'Systran/faster-whisper-small.en', 'medium.en': 'Systran/faster-whisper-medium.en',
+         # Multilingual: Hindi, Hinglish and other languages
+         'base': 'Systran/faster-whisper-base', 'small': 'Systran/faster-whisper-small', 'medium': 'Systran/faster-whisper-medium'}
 
 if __name__ == '__main__':
     size = sys.argv[1] if len(sys.argv) > 1 else 'small.en'

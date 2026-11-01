@@ -188,6 +188,7 @@ class ConversationContext:
     search_context: dict[str, Any] | None = None  # {tabId, url, site, query, created_at}
     active_app: str | None = None
     media_state: dict[str, Any] | None = None
+    hints_until: float = 0.0  # numbered hints are showing until this monotonic time
     last_executed_plan: Any = None
     awaiting_approval: dict[str, Any] | None = None
 
@@ -295,6 +296,8 @@ def tidy_speech(text: str) -> str:
 
 def normalize_utterance(text: str) -> str:
     """Clean conversational fillers, contractions, and domain words while preserving quotes and semantic entities."""
+    from blok import hinglish
+    text = hinglish.translate(text) or text
     repaired = repair_self_corrections(tidy_speech(text))
     s = repaired.strip().replace('’', "'")
     s = s.replace("dot com", ".com").replace("dot org", ".org").replace("dot net", ".net")
@@ -382,6 +385,51 @@ def split_compound_utterance(text: str) -> list[str]:
     return cleaned if cleaned else [text.strip()]
 
 
+NUMBER_WORDS = (r'(?:\d{1,3}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|'
+                r'sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)'
+                r'(?:[ -](?:one|two|three|four|five|six|seven|eight|nine))?)')
+KEYS = {'tab': 'Tab', 'escape': 'Escape', 'esc': 'Escape', 'space': 'space', 'spacebar': 'space', 'backspace': 'BackSpace',
+        'delete': 'Delete', 'up': 'Up', 'down': 'Down', 'left': 'Left', 'right': 'Right', 'home': 'Home', 'end': 'End',
+        'page up': 'Prior', 'page down': 'Next'}
+
+
+def _hands_free_intent(norm: str, context: "ConversationContext | None") -> dict | None:
+    """Hands-free commands: numbered hints, scrolling, typing, keys and the listening mode."""
+    from blok.router import number
+    t = norm.strip().strip('.!?')
+    if re.fullmatch(r'(?:(?:turn|switch|put) (?:on|me in)|start|enable|go) hands?[- ]?free(?: mode)?|hands?[- ]?free(?: mode)?(?: on)?', t, re.I):
+        return {'tool': 'handsfree', 'on': True}
+    if re.fullmatch(r'(?:(?:turn|switch) off|stop|disable|exit|leave) hands?[- ]?free(?: mode)?|hands?[- ]?free(?: mode)? off', t, re.I):
+        return {'tool': 'handsfree', 'on': False}
+    if re.fullmatch(r'(?:show|display|give me|put up|turn on)(?: me)?(?: the| all)? (?:numbers|hints|labels|links|buttons)'
+                    r'(?: on (?:the|this) (?:page|screen))?|numbers|number (?:mode|them|everything)', t, re.I):
+        return {'tool': 'hints', 'show': True}
+    if re.fullmatch(r'(?:hide|clear|remove|close|get rid of|turn off)(?: the)? (?:numbers|hints|labels)|no (?:more )?numbers', t, re.I):
+        return {'tool': 'hints', 'show': False}
+    showing = bool(context and context.hints_until > time.monotonic())
+    m = re.fullmatch(r'(?:(click|press|tap|open|select|choose|pick|hit|go to|follow)(?: on)?(?: the)?(?: number| link| button| item)? )?'
+                     r'(?:number )?(' + NUMBER_WORDS + r')((?: in a)? new tab)?', t, re.I)
+    if m and (m[1] or showing or t.lower().startswith('number')):
+        n = number(m[2])
+        if n:
+            return {'tool': 'hint', 'n': n, 'new_tab': bool(m[3])}
+    m = re.fullmatch(r'(?:keep )?(?:scroll(?:ing)?|page|go|move|swipe)(?: it| the page)? (down|up)'
+                     r'( a (?:little )?bit| a little| slightly)?(?: more)?|page (down|up)|(?:keep )?scrolling', t, re.I)
+    if m:
+        direction = (m[1] or m[3] or 'down').lower()
+        return {'tool': 'scroll', 'direction': direction, 'amount': 'little' if m[2] else 'page'}
+    m = re.fullmatch(r'(?:scroll|go|jump|take me)(?: all the way)?(?: back)? (?:to|up to|down to) (?:the )?(top|bottom|end|start)(?: of the page)?', t, re.I)
+    if m:
+        return {'tool': 'scroll', 'direction': {'end': 'bottom', 'start': 'top'}.get(m[1].lower(), m[1].lower()), 'amount': 'page'}
+    m = re.fullmatch(r'type (.+)', t, re.I)
+    if m and not re.search(r'\s(?:into|in) (?:the )?.+? (?:field|box|bar)$|\s(?:into|in) the .+$', t, re.I):
+        return {'tool': 'type', 'text': m[1].strip()}
+    m = re.fullmatch(r'(?:press|hit|tap|push)(?: the)? (' + '|'.join(sorted(KEYS, key=len, reverse=True)) + r')(?: key| button)?', t, re.I)
+    if m:
+        return {'tool': 'key', 'key': KEYS[m[1].lower()]}
+    return None
+
+
 def resolve_intent(text: str, context: ConversationContext | None = None) -> ResolvedIntent:
     """Tier 1: Canonical deterministic intent resolution & slot extraction."""
     raw = text.strip()
@@ -429,7 +477,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 3a. HITL Approval / Rejection commands
-    if re.fullmatch(r'(?:yes|yeah|yep|approve|confirm|proceed|go ahead|do it|sure|ok|okay)(?:\s+(?:please|go ahead|do it|proceed|yes))?[.!]?', norm, re.I):
+    if re.fullmatch(r'(?:yes|yeah|yep|approve|confirm|proceed|go ahead|do it|sure|ok|okay|haan|haan ji|ha|ji|ji haan|theek hai|thik hai|kar do|chalo kar do)(?:\s+(?:please|go ahead|do it|proceed|yes|kar do|ji))?[.!]?', norm, re.I):
         return ResolvedIntent(
             intent_type="hitl_approve",
             confidence=0.99,
@@ -438,7 +486,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
             action_kind="hitl_approval",
             action_value="approve",
         )
-    if re.fullmatch(r'(?:no|nope|reject|deny|cancel|skip(?: that)?|don\'t do that|abort)(?:\s+(?:thanks|thank you|cancel(?: that)?|no|don\'t))?[.!]?', norm, re.I):
+    if re.fullmatch(r'(?:no|nope|reject|deny|cancel|skip(?: that)?|don\'t do that|abort|nahi|nahin|nai|mat karo|rehne do|rahne do|ruko|cancel karo)(?:\s+(?:thanks|thank you|cancel(?: that)?|no|don\'t|yaar|bhai|rehne do|rahne do|mat karo|abhi nahi))?[.!]?', norm, re.I):
         return ResolvedIntent(
             intent_type="hitl_reject",
             confidence=0.99,
@@ -701,6 +749,11 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         task = {"action": "site_search", "query": m[1].strip()}
         return ResolvedIntent(intent_type="search", entities=task, confidence=0.94, raw_text=raw, normalized_text=norm,
                               action_kind="web_task", action_value=json.dumps(task))
+    # Hands-free: numbered hints, scrolling, typing, keys, listening mode
+    hands_free = _hands_free_intent(norm, context)
+    if hands_free:
+        return ResolvedIntent(intent_type="hands_free:" + hands_free["tool"], entities=hands_free, confidence=0.95,
+                              raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(hands_free))
     # "click that button" → whatever the mouse is pointing at in the browser
     if re.fullmatch(r'(?:click|press|hit|tap|select|push)(?: on)? (?:that|this|it|here|there|the one under (?:the|my) (?:mouse|cursor|pointer))'
                     r'(?: (?:button|link|thing|one|tab|video|item|icon|option))?(?: (?:right )?(?:here|there))?', norm, re.I):

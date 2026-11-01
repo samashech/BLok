@@ -81,6 +81,59 @@ export async function pageAction(request, captureErrors=false) {
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
   }
+  if(request.op==='hints') {
+    // Vimium-style numbered labels on every visible clickable element.
+    document.getElementById('__blok_hints')?.remove();
+    if(request.show===false){globalThis.__blokHints=null;return message('Hid the numbers');}
+    const inView=e=>{const r=e.getBoundingClientRect();return r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth;};
+    const chosen=[];
+    for(const e of nodes){
+      if(!inView(e)||chosen.some(c=>c.contains(e)&&roleOf(c)!=='textbox'))continue;  // one label per control
+      if(e.disabled||e.getAttribute('aria-disabled')==='true')continue;
+      chosen.push(e);if(chosen.length>=150)break;
+    }
+    const host=document.createElement('div');host.id='__blok_hints';
+    host.style.cssText='position:fixed;inset:0;pointer-events:none;z-index:2147483647';
+    const root=host.attachShadow({mode:'closed'});
+    const style=document.createElement('style');
+    style.textContent='span{position:fixed;font:700 11px/1 ui-monospace,monospace;padding:2px 4px;border-radius:3px;background:#ffd84d;color:#111;box-shadow:0 1px 3px #0008;border:1px solid #0006}';
+    root.append(style);
+    chosen.forEach((e,i)=>{const r=e.getBoundingClientRect(),tag=document.createElement('span');
+      tag.textContent=String(i+1);tag.style.left=Math.max(0,r.left)+'px';tag.style.top=Math.max(0,r.top)+'px';root.append(tag);});
+    document.documentElement.append(host);
+    globalThis.__blokHints={page:page(),items:chosen.map(descriptor),hrefs:chosen.map(e=>e.matches('a[href]')?e.href:'')};
+    // Positions go stale on scroll or resize, so the labels go away.
+    const clear=()=>{document.getElementById('__blok_hints')?.remove();removeEventListener('scroll',clear,true);removeEventListener('resize',clear);};
+    addEventListener('scroll',clear,{capture:true,passive:true});addEventListener('resize',clear,{passive:true});
+    return {...message('Showing '+chosen.length+' numbers'),count:chosen.length};
+  }
+  if(request.op==='hint') {
+    const hints=globalThis.__blokHints;
+    if(!hints||hints.page!==page()) throw Error('No numbers are showing on this page. Say "show numbers" first.');
+    const control=hints.items[(request.n|0)-1];
+    if(!control) throw Error('There is no number '+request.n+'. The numbers go up to '+hints.items.length+'.');
+    const e=nodes.find(n=>descriptor(n).id===control.id);
+    if(!e||descriptor(e).fingerprint!==control.fingerprint) throw Error('That item changed. Say "show numbers" again.');
+    return {url:location.href,page:hints.page,name:name(e).trim().slice(0,140)||roleOf(e),control,href:hints.hrefs[(request.n|0)-1],editable:editable(e)};
+  }
+  if(request.op==='scroll') {
+    // Scroll the page, or the biggest scrollable panel when the page itself doesn't scroll.
+    const scrollable=e=>e&&e.scrollHeight>e.clientHeight+20&&/(auto|scroll)/.test(getComputedStyle(e).overflowY);
+    let target=document.scrollingElement;
+    if(target.scrollHeight<=innerHeight+20){
+      const panels=[...document.querySelectorAll('*')].filter(scrollable).sort((a,b)=>b.clientHeight*b.clientWidth-a.clientHeight*a.clientWidth);
+      if(panels[0])target=panels[0];
+    }
+    const before=target.scrollTop, step=(target===document.scrollingElement?innerHeight:target.clientHeight)*(request.amount==='little'?0.35:0.85);
+    const top=request.direction==='top'?0:request.direction==='bottom'?target.scrollHeight:before+(request.direction==='up'?-step:step);
+    target.scrollTo({top,behavior:'smooth'});
+    return {...message('Scrolled '+request.direction),moved:true};
+  }
+  if(request.op==='focused_field') {
+    let e=document.activeElement;
+    while(e?.shadowRoot?.activeElement)e=e.shadowRoot.activeElement;
+    return {editable:!!e&&editable(e)&&!e.matches('input[type="password"]'),name:e?name(e).slice(0,80):''};
+  }
   if(request.op==='pointer') {
     const point=globalThis.__blokPointer;
     if(!point||Date.now()-point.t>10*60*1000) throw Error('Move the mouse over it first. If you just updated BLoK, reload this page once.');

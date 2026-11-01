@@ -128,18 +128,29 @@ def vocabulary() -> str:
         extra = [w.strip() for w in WORDS_FILE.read_text().splitlines() if w.strip() and not w.startswith('#')]
     except OSError:
         extra = []
-    return VOCABULARY.rstrip('.') + (', ' + ', '.join(extra[:60]) if extra else '') + '.'
+    hint = VOCABULARY.rstrip('.') + (', ' + ', '.join(extra[:60]) if extra else '') + '.'
+    return hint + ' ' + HINGLISH_HINTS if multilingual() else hint
 
 
 _whisper = {'model': None}
 _whisper_lock = threading.Lock()
 
 
-WHISPER_SIZES = ('small.en', 'base.en', 'medium.en', 'tiny.en', 'large-v3-turbo')
+# Multilingual models first: installed for Hindi/Hinglish, and almost as good at English.
+WHISPER_SIZES = ('small', 'medium', 'base', 'small.en', 'base.en', 'medium.en', 'tiny.en', 'large-v3-turbo')
+# Romanized Hinglish in the prompt keeps a multilingual model writing Hindi words in Latin letters.
+HINGLISH_HINTS = 'YouTube pe gaane chalao, awaaz badhao, kitne baje hain, folder kholo, screenshot lo, neeche scroll karo.'
+
+
+def multilingual() -> bool:
+    try:
+        return not Path(whisper_model_path()).name.endswith('.en')
+    except RuntimeError:
+        return False
 
 
 def whisper_model_path() -> str:
-    """BLOK_WHISPER_MODEL, else the installed size (small.en preferred)."""
+    """BLOK_WHISPER_MODEL, else the installed model (multilingual small preferred, then small.en)."""
     from blok.paths import MODELS
     configured = os.environ.get('BLOK_WHISPER_MODEL')
     if configured:
@@ -312,3 +323,89 @@ class WhisperSession:
 
 def new_session():
     return VoxtypeSession() if os.environ.get('BLOK_STT') == 'voxtype' else WhisperSession()
+
+
+# Whisper's spellings of "BLoK"; the bare name must open the utterance.
+WAKE = re.compile(r"^\W*(?:(?:hey|hi|okay|ok|yo)[\s,]+(?:block|blok|bloc|blog|bloke|black|blocks)|block|blok)\b[\s,.!?]*", re.I)
+
+
+class HandsFreeListener:
+    """Always-on listening for "hey block …", with an 8 s window for follow-ups.
+
+    PipeWire streams 16 kHz audio into memory; an adaptive loudness gate cuts it
+    into utterances and only those are transcribed. Nothing is written to disk,
+    and audio that doesn't address BLoK is dropped immediately.
+    """
+    FRAME = 480                 # 30 ms
+    FOLLOW_UP_SECONDS = 8.0
+
+    def __init__(self, on_command, on_wake=None, paused=lambda: False):
+        self.on_command = on_command
+        self.on_wake = on_wake or (lambda: None)
+        self.paused = paused
+        self.process = None
+        self.thread = None
+        self.running = False
+        self.follow_until = 0.0
+
+    def start(self):
+        recorder = shutil.which('pw-record')
+        if not recorder:
+            raise RuntimeError('pw-record (PipeWire) is needed for hands-free listening.')
+        self.running = True
+        self.process = subprocess.Popen([recorder, '--rate', '16000', '--channels', '1', '--format', 's16', '-'],
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.process and self.process.poll() is None:
+            self.process.kill()
+            self.process.wait()
+
+    def _loop(self):
+        import collections
+        import numpy
+        pre_roll = collections.deque(maxlen=10)          # 300 ms before speech starts
+        floor, voiced_run, silent_run, segment = 0.002, 0, 0, None
+        while self.running:
+            chunk = self.process.stdout.read(self.FRAME * 2)
+            if len(chunk) < self.FRAME * 2:
+                break
+            frame = numpy.frombuffer(chunk, dtype='<i2').astype('float32') / 32768.0
+            level = float(numpy.sqrt((frame ** 2).mean()))
+            loud = level > max(floor * 3, 0.004)
+            if not loud:
+                floor = floor * 0.995 + level * 0.005    # follow the room's noise slowly
+            if segment is None:
+                pre_roll.append(frame)
+                voiced_run = voiced_run + 1 if loud else 0
+                if voiced_run >= 3:
+                    segment, silent_run = list(pre_roll), 0
+                continue
+            segment.append(frame)
+            silent_run = 0 if loud else silent_run + 1
+            if silent_run >= 23 or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
+                audio = numpy.concatenate(segment)
+                segment, voiced_run = None, 0
+                pre_roll.clear()
+                if not self.paused():
+                    self.handle(audio)
+
+    def handle(self, audio):
+        text = transcribe(audio)
+        if not text:
+            return
+        now = time.monotonic()
+        wake = WAKE.match(text)
+        if wake:
+            command = text[wake.end():].strip(' ,.!?')
+            self.follow_until = now + self.FOLLOW_UP_SECONDS
+            if command:
+                self.on_command(command)
+            else:
+                self.on_wake()
+        elif now < self.follow_until:
+            self.follow_until = now + self.FOLLOW_UP_SECONDS
+            self.on_command(text.strip(' ,.!?'))

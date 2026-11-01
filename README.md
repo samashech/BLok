@@ -54,6 +54,36 @@ You don't need to phrase things properly. Fillers, stutters, slang and mid-sente
 
 Anything that changes or deletes something, or that BLoK isn't sure about, shows an approval card first. Say “yes” or press Enter to approve; say “no” or press Esc to cancel.
 
+## Hinglish
+
+BLoK understands everyday Hinglish and answers the same way, in a Hindi voice:
+
+| You say | BLoK does |
+|---|---|
+| “YouTube pe Arijit ke gaane chalao” | plays Arijit Singh songs on YouTube |
+| “bhai zara spotify khol do” · “downloads folder kholo” | opens them |
+| “awaaz thoda badhao” · “brightness kam karo” | volume up · brightness down |
+| “kitne baje hain?” | *“Abhi 3 baj kar 20 minute hue hain”* |
+| “youtube kholo aur phir minecraft search karo” | both, in order |
+| “numbers dikhao” … “barah pe click karo” | hands-free clicking |
+| “haan” / “nahi, rehne do” | approves or cancels |
+
+Spoken Hinglish needs the multilingual Whisper model (installer option 4, 465 MB, same speed as the English one). It's about as accurate at English, and it's used automatically when installed. Typed Hinglish and Devanagari work with any model.
+
+## Hands-free
+
+Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for its name; no keyboard needed. Start with **“hey block”**, then keep going for 8 seconds without repeating it.
+
+| Say | Does |
+|---|---|
+| “hey block, show numbers” | numbers every link, button and field on the page |
+| “12” · “open 4 in a new tab” | clicks number 12 (fields get selected) · opens a link in a new tab |
+| “type hello world” · “press tab” · “press enter” | types into the selected field · presses keys, in any app |
+| “scroll down” · “scroll up a little” · “go to the top” | scrolls the page, or the app in front |
+| “hide numbers” · “hands free off” | clears the numbers · stops listening |
+
+It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers need the browser extension updated to `phase9`: reload it in `brave://extensions`, then reload open pages.
+
 ## Make it yours
 
 ### Add a command in 30 seconds
