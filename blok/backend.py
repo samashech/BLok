@@ -96,6 +96,12 @@ class Backend:
         if captured is None:
             self.schedule_follow_up()
 
+    def idle_message(self):
+        """What the overlay says at rest: hands-free keeps listening for its name even then."""
+        if self.hands_free is not None:
+            return 'Hands-free: say "hey block"'
+        return 'Tap the mic or press Ctrl+. to talk'
+
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
 
@@ -181,7 +187,7 @@ class Backend:
         self.cancel_all_approvals()
         self.emit(type="activity", state="idle")
         self.emit(type="level", value=0)
-        self.status("ready", "Microphone off")
+        self.status("ready", self.idle_message())
 
     def listen(self, follow_up=False):
         if self.listening:
@@ -1010,6 +1016,8 @@ class Backend:
             DATA.mkdir(parents=True, exist_ok=True)
             (DATA / 'settings.json').write_text(json.dumps(settings, indent=2) + "\n")
         self.emit(type="handsfree", on=bool(on))
+        if not self.listening:
+            self.status("ready", self.idle_message())
         return 'Hands-free is on. Say "hey block" and a command.' if on else 'Hands-free is off.'
 
     def extension_version(self):
@@ -1513,7 +1521,7 @@ class Backend:
                         follow_up = getattr(self.voice, 'follow_up', False)
                         self.voice = None
                         self.listening = False
-                        self.status("ready", "Microphone off")
+                        self.status("ready", self.idle_message())
                         self.emit(type="activity", state="idle")
                         if event["text"]:
                             self.transcript(event["text"], True, source="voice")
