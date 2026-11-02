@@ -18,7 +18,8 @@ speech.whisper()
 with tempfile.TemporaryDirectory() as folder:
     path = Path(folder) / 'mic.wav'
     print(f'Speak a command now ({seconds:g} s)…', flush=True)
-    recorder = subprocess.Popen(['pw-record', '--rate', '16000', '--channels', '1', '--format', 's16', str(path)])
+    print('Recording from:', (speech.microphone() or ['', 'PipeWire default'])[1])
+    recorder = subprocess.Popen(speech.record_command(str(path)))
     time.sleep(seconds)
     recorder.terminate()
     recorder.wait()

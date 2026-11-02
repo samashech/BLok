@@ -122,12 +122,25 @@ class WhisperSessionTests(unittest.TestCase):
     def test_recorder_streams_16k_mono_to_memory(self):
         from blok.speech import WhisperSession
         with patch('blok.speech.shutil.which', return_value='/usr/bin/pw-record'), \
+             patch.dict(os.environ, {'BLOK_MIC': 'mic1'}), \
              patch('blok.speech.subprocess.Popen') as popen, patch('blok.speech.time.sleep'), \
              patch('blok.speech.threading.Thread'):
             popen.return_value.poll.return_value = None
             voice = WhisperSession()
             voice.start()
-        self.assertEqual(popen.call_args[0][0], ['/usr/bin/pw-record', '--rate', '16000', '--channels', '1', '--format', 's16', '-'])
+        self.assertEqual(popen.call_args[0][0],
+                         ['/usr/bin/pw-record', '--target', 'mic1', '--rate', '16000', '--channels', '1', '--format', 's16', '-'])
+
+    def test_records_from_the_default_mic_by_name(self):
+        # PipeWire's automatic routing picked a silent input; the configured default is asked for by name.
+        from blok import speech
+        info = Mock(stdout='id 63, type PipeWire:Interface:Node\n  * node.name = "alsa_input.Mic1__source"\n')
+        with patch.dict(os.environ, {'BLOK_MIC': ''}), patch('blok.speech.subprocess.run', return_value=info):
+            self.assertEqual(speech.microphone(), ['--target', 'alsa_input.Mic1__source'])
+        with patch.dict(os.environ, {'BLOK_MIC': 'my.usb.mic'}):
+            self.assertEqual(speech.microphone(), ['--target', 'my.usb.mic'])
+        with patch.dict(os.environ, {'BLOK_MIC': ''}), patch('blok.speech.subprocess.run', side_effect=OSError):
+            self.assertEqual(speech.microphone(), [])
 
     def test_voxtype_only_when_chosen(self):
         from blok import speech

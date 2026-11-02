@@ -261,6 +261,31 @@ def warm_up():
     threading.Thread(target=run, daemon=True).start()
 
 
+def microphone() -> list[str]:
+    """pw-record arguments that pick the microphone explicitly.
+
+    PipeWire's automatic routing can connect to a different (sometimes silent)
+    input than the one your sound settings call the default, so BLoK asks for
+    the default source by name. BLOK_MIC overrides it with a node name.
+    """
+    name = os.environ.get('BLOK_MIC', '').strip()
+    if not name:
+        try:
+            info = subprocess.run(['wpctl', 'inspect', '@DEFAULT_AUDIO_SOURCE@'], capture_output=True, text=True, timeout=3).stdout
+            found = re.search(r'node\.name = "([^"]+)"', info)
+            name = found[1] if found else ''
+        except (OSError, subprocess.SubprocessError):
+            name = ''
+    return ['--target', name] if name else []
+
+
+def record_command(destination: str = '-') -> list[str]:
+    recorder = shutil.which('pw-record')
+    if not recorder:
+        raise RuntimeError('pw-record (PipeWire) is needed to use the microphone.')
+    return [recorder, *microphone(), '--rate', '16000', '--channels', '1', '--format', 's16', destination]
+
+
 class Endpointer:
     """Frame by frame (30 ms), decides when speech starts and when it has ended.
 
@@ -327,13 +352,11 @@ class WhisperSession:
             self.model = 'Whisper ' + Path(whisper_model_path()).name.removeprefix('whisper-')
         except RuntimeError:
             self.model = 'Whisper'
-        self.recorder = shutil.which('pw-record')
-        if not self.recorder:
-            raise RuntimeError('pw-record (PipeWire) is needed to use the microphone.')
+        self.command = record_command()
 
     def start(self):
         self.started = time.monotonic()
-        self.process = subprocess.Popen([self.recorder, '--rate', '16000', '--channels', '1', '--format', 's16', '-'],
+        self.process = subprocess.Popen(self.command,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(.1)
         if self.process.poll() is not None:
@@ -488,11 +511,9 @@ class HandsFreeListener:
         self.heard = collections.deque(maxlen=12)
 
     def start(self):
-        recorder = shutil.which('pw-record')
-        if not recorder:
-            raise RuntimeError('pw-record (PipeWire) is needed for hands-free listening.')
+        command = record_command()
         self.running = True
-        self.process = subprocess.Popen([recorder, '--rate', '16000', '--channels', '1', '--format', 's16', '-'],
+        self.process = subprocess.Popen(command,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
