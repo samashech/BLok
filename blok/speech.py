@@ -139,7 +139,8 @@ _whisper_lock = threading.Lock()
 # Multilingual models first: installed for Hindi/Hinglish, and almost as good at English.
 WHISPER_SIZES = ('small', 'medium', 'base', 'small.en', 'base.en', 'medium.en', 'tiny.en', 'large-v3-turbo')
 # Romanized Hinglish in the prompt keeps a multilingual model writing Hindi words in Latin letters.
-HINGLISH_HINTS = 'YouTube pe gaane chalao, awaaz badhao, kitne baje hain, folder kholo, screenshot lo, neeche scroll karo.'
+# Kept short: on unclear audio Whisper sometimes just recites its prompt back.
+HINGLISH_HINTS = 'YouTube pe gaana chalao.'
 
 
 def multilingual() -> bool:
@@ -197,6 +198,33 @@ def has_speech(audio) -> bool:
     return int(loud.sum()) >= 6  # at least ~0.2 s of voice
 
 
+_spotter = {'model': None, 'checked': False}
+
+
+def spotter():
+    """A small English model for hearing "hey block" quickly; falls back to the main model."""
+    from blok.paths import MODELS
+    with _whisper_lock:
+        if not _spotter['checked']:
+            _spotter['checked'] = True
+            for size in ('tiny.en', 'base.en'):
+                if (MODELS / f'whisper-{size}' / 'model.bin').exists():
+                    from faster_whisper import WhisperModel
+                    # More threads: ~0.5 s instead of ~1.2 s per check, since Whisper always encodes a 30 s window.
+                    _spotter['model'] = WhisperModel(str(MODELS / f'whisper-{size}'), device='cpu', compute_type='int8',
+                                                     cpu_threads=max(2, min(8, (os.cpu_count() or 4) // 2)))
+                    break
+    return _spotter['model'] or whisper()
+
+
+def spot_wake(audio) -> bool:
+    """Fast check of the first moments of speech: does it start with "hey block"?"""
+    audio = normalize(audio - audio.mean())
+    segments, _ = spotter().transcribe(audio, language='en', beam_size=1, vad_filter=False, condition_on_previous_text=False,
+                                       without_timestamps=True, initial_prompt='Hey Block.')
+    return wake(' '.join(segment.text.strip() for segment in segments))[0]
+
+
 def transcribe(audio) -> str:
     audio = audio - audio.mean()
     if not has_speech(audio):
@@ -210,7 +238,17 @@ def transcribe(audio) -> str:
     # Whisper's well-known inventions on silence or room noise.
     if re.fullmatch(r"(?:thanks? (?:you )?for watching|thank you|you|bye|please subscribe|subtitles by .*|\.+)[.!]?", text, re.I):
         return ''
-    return text
+    return '' if echoes_prompt(text) else text
+
+
+def echoes_prompt(text: str) -> bool:
+    """True when a transcript is just the hint prompt recited back (Whisper does this on unclear audio)."""
+    said = re.findall(r"[a-z']+", text.lower())
+    prompt = set(re.findall(r"[a-z']+", (vocabulary() + ' ' + HINGLISH_HINTS + ' ' +
+                                        'YouTube pe gaane chalao, awaaz badhao, kitne baje hain, folder kholo, screenshot lo, neeche scroll karo').lower()))
+    content = [w for w in said if w not in ('hey', 'block', 'blok', 'a', 'the', 'and', 'ok', 'okay')]
+    # Recitals come out as comma-separated lists of hint words; real commands rarely do.
+    return len(content) >= 4 and text.count(',') >= 2 and sum(w in prompt for w in content) / len(content) >= 0.8
 
 
 def warm_up():
@@ -398,6 +436,15 @@ NAMES = {'block', 'blok', 'bloc', 'blog', 'bloke', 'blocks', 'blox', 'blokk', 'b
 NEAR_NAMES = NAMES | {'black', 'brock', 'glock', 'plock', 'flock', 'clock', 'blake', 'blob', 'bloque', 'block.'}
 
 
+def clean_command(rest: str) -> str:
+    """What follows the name, minus repeated "hey block"s; '' if nothing real is left."""
+    rest = re.sub(r"\b(?:(?:hey|hi|ok|okay|a|yo)[\s,]+)?(?:block|blok|bloc|blog|bloke|black|brock)\b[\s,.!?]*", ' ', rest, flags=re.I)
+    rest = re.sub(r"^(?:\s*(?:ok(?:ay)?|um+|uh+|so|and|yeah|hmm+)[\s,.!?]+)+", '', rest.strip(' ,.!?'), flags=re.I)
+    rest = re.sub(r"\s+", ' ', rest).strip(' ,.!?')
+    words = re.findall(r"[^\W\d_]{3,}", rest)
+    return rest if words else ''
+
+
 def wake(text: str) -> tuple[bool, str]:
     """Did the utterance start by addressing BLoK? Returns (woke, the command after the name).
 
@@ -411,7 +458,7 @@ def wake(text: str) -> tuple[bool, str]:
         greeted = i > 0 and words[i - 1].group(0).lower() in GREETINGS
         close = token in NEAR_NAMES or SequenceMatcher(None, token, 'block').ratio() >= 0.75
         if (token in NAMES and (i == 0 or greeted)) or (greeted and close):
-            return True, text[word.end():].strip(' ,.!?')
+            return True, clean_command(text[word.end():])
         if i == 0 and token not in GREETINGS:
             break
     return False, text
@@ -429,7 +476,8 @@ class HandsFreeListener:
 
     def __init__(self, on_command, on_wake=None, paused=lambda: False):
         self.on_command = on_command
-        self.on_wake = on_wake or (lambda: None)
+        self.on_wake = on_wake or (lambda early=False: None)
+        self.addressed = False
         self.paused = paused
         self.process = None
         self.thread = None
@@ -472,6 +520,8 @@ class HandsFreeListener:
                     segment = list(pre_roll)
                 continue
             segment.append(frame)
+            if len(segment) == 35 and not self.paused():   # ~1 s in (with pre-roll): is this "hey block"?
+                self._spot(numpy.concatenate(segment))
             if event == 'end' or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
                 audio = numpy.concatenate(segment)
                 segment = None
@@ -479,6 +529,18 @@ class HandsFreeListener:
                 endpointer.reset()
                 if not self.paused():
                     self.handle(audio)
+                self.addressed = False
+
+    def _spot(self, audio):
+        """React to the name while you're still talking: the overlay opens right away."""
+        def run():
+            try:
+                if spot_wake(audio):
+                    self.addressed = True
+                    self.on_wake(early=True)
+            except Exception:
+                pass
+        threading.Thread(target=run, daemon=True).start()
 
     def handle(self, audio):
         text = transcribe(audio)
@@ -486,16 +548,19 @@ class HandsFreeListener:
             return
         now = time.monotonic()
         woke, command = wake(text)
+        if not woke and getattr(self, 'addressed', False):
+            # The fast check heard the name even if the full transcript spells it oddly.
+            woke, command = True, clean_command(' '.join(text.split()[1:]) if len(text.split()) > 1 else '')
         following = now < self.follow_until
-        self.heard.append({'at': time.strftime('%H:%M:%S'), 'text': text,
-                           'acted': woke or following})
+        self.heard.append({'at': time.strftime('%H:%M:%S'), 'text': text, 'acted': woke or following,
+                           'command': command if woke else (text if following else '')})
         if woke:
             self.follow_until = 0.0         # reopened once BLoK has answered
             if command:
                 self.on_command(command)
             else:
                 self.follow_until = now + self.FOLLOW_UP_SECONDS
-                self.on_wake()
+                self.on_wake(early=False)
         elif following:
             self.follow_until = 0.0
             self.on_command(text.strip(' ,.!?'))

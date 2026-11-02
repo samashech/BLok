@@ -162,3 +162,13 @@ class WhisperTuningTests(unittest.TestCase):
                 hint = speech.vocabulary()
         self.assertIn('Arijit Singh, Phantom Blade', hint)
         self.assertNotIn('comment', hint)
+
+
+class PromptEchoTests(unittest.TestCase):
+    def test_recited_hints_are_dropped_but_real_commands_kept(self):
+        from blok import speech
+        self.assertTrue(speech.echoes_prompt('YouTube pe gaane chalao, snapshot lo, neeche scroll karo, screenshot lo, neeche scroll karo'))
+        self.assertTrue(speech.echoes_prompt('BLoK, Laya, Omarchy, Hyprland, YouTube, Spotify'))
+        self.assertFalse(speech.echoes_prompt('open youtube and search for minecraft speedruns'))
+        self.assertFalse(speech.echoes_prompt('YouTube pe Arijit ke gaane chalao'))
+        self.assertFalse(speech.echoes_prompt('open spotify'))

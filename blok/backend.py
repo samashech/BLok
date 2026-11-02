@@ -995,10 +995,12 @@ class Backend:
         if on and self.hands_free is None:
             listener = HandsFreeListener(
                 on_command=lambda text: self.events.put((None, {"command": "hands_free_text", "text": text})),
-                on_wake=lambda: self.events.put((None, {"command": "hands_free_wake"})),
+                on_wake=lambda early=False: self.events.put((None, {"command": "hands_free_wake", "early": early})),
                 paused=lambda: self.voice is not None or self.speaker.speaking())
             listener.start()
             self.hands_free = listener
+            from blok import speech
+            threading.Thread(target=speech.spotter, daemon=True).start()   # load the fast model now
         elif not on and self.hands_free is not None:
             self.hands_free.stop()
             self.hands_free = None
@@ -1477,8 +1479,9 @@ class Backend:
                         continue
                     if event.get("command") == "quit": break
                     if event.get("command") == "hands_free_wake":
+                        # The overlay is the cue: it opens the moment the name is heard.
                         self.emit(type="wake")
-                        self.speaker.say("Yes?")
+                        self.status("listening", "I'm listening…" if event.get("early") else "Yes? Say your command.")
                         continue
                     if event.get("command") == "hands_free_text":
                         self.emit(type="wake")

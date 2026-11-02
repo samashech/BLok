@@ -43,7 +43,8 @@ except OSError:
 if not reply['on']:
     print('Hands-free is off. Say "hands free on" or run: blok handsfree on')
 for item in reply['heard'] or [{'at': '', 'text': '(nothing heard yet)', 'acted': False}]:
-    print(f"{item['at']}  {'acted  ' if item['acted'] else 'ignored'}  {item['text']}")
+    command = f"   → ran: {item['command']}" if item.get('command') else ('   → waited for your command' if item['acted'] else '')
+    print(f"{item['at']}  {'acted  ' if item['acted'] else 'ignored'}  {item['text']}{command}")
 PY
   ;;
   handsfree) quickshell ipc -p "$BLOK_ROOT/ui" call blok handsfree "${2:?Choose on or off}" ;;

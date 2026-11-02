@@ -22,7 +22,7 @@ class WakeTests(unittest.TestCase):
 class ListenerTests(unittest.TestCase):
     def listener(self):
         self.commands, self.wakes = [], []
-        return HandsFreeListener(self.commands.append, lambda: self.wakes.append(1))
+        return HandsFreeListener(self.commands.append, lambda early=False: self.wakes.append(early))
 
     def test_wake_command_and_follow_ups(self):
         heard = self.listener()
@@ -40,7 +40,26 @@ class ListenerTests(unittest.TestCase):
         heard = self.listener()
         with patch.object(speech, 'transcribe', return_value='Hey block.'):
             heard.handle(numpy.zeros(1))
-        self.assertEqual((self.commands, self.wakes), ([], [1]))
+        self.assertEqual((self.commands, self.wakes), ([], [False]))
+
+    def test_repeated_names_and_junk_are_not_a_command(self):
+        heard = self.listener()
+        with patch.object(speech, 'transcribe', side_effect=['Hey Block! 639, OK. Hey Block! Hey Block!',
+                                                             'Hey Block, hey block, open YouTube']):
+            heard.handle(numpy.zeros(1))
+            heard.handle(numpy.zeros(1))
+        self.assertEqual(self.wakes, [False])               # the first was just the name: wait for the command
+        self.assertEqual(self.commands, ['open YouTube'])
+
+    def test_fast_check_counts_even_if_the_full_transcript_misspells_it(self):
+        heard = self.listener()
+        with patch.object(speech, 'spot_wake', return_value=True):
+            heard._spot(numpy.zeros(1))
+            import time as _t; _t.sleep(0.1)
+        self.assertEqual(self.wakes, [True])                # overlay opened while still talking
+        with patch.object(speech, 'transcribe', return_value='Heyblok open the terminal'):
+            heard.handle(numpy.zeros(1))
+        self.assertEqual(self.commands, ['open the terminal'])
 
     def test_segmenter_cuts_one_utterance_from_a_stream(self):
         heard = self.listener()
