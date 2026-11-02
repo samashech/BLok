@@ -74,6 +74,12 @@ class Bridge:
         with conn:
             try:
                 request = json.loads(conn.makefile('rb').readline(1 << 20))
+                if request.get('internal') == 'heard':
+                    # `blok heard`: what hands-free heard lately (memory only), to see why it did or didn't wake.
+                    listener = self.backend.hands_free
+                    conn.sendall(json.dumps({'ok': True, 'on': listener is not None,
+                                             'heard': list(listener.heard) if listener else []}).encode() + b'\n')
+                    return
                 result = {'ok': True, 'text': self.call(request.get('tool', ''), request.get('args') or {}, request.get('client', 'An AI app'))}
             except Exception as error:   # report every failure to the AI client as text
                 result = {'ok': False, 'text': str(error)}

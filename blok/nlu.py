@@ -431,6 +431,33 @@ def _hands_free_intent(norm: str, context: "ConversationContext | None") -> dict
     return None
 
 
+
+def _page_navigation(norm: str, context: "ConversationContext | None") -> dict | None:
+    """With a web page in front, "go to X" / "open X" means the page's own link or button X."""
+    if not (context and context.active_site and str(context.active_url or '').startswith(('http://', 'https://'))):
+        return None
+    t = norm.strip().strip('.!?')
+    m = re.fullmatch(r'(?:go to|move to)? ?(?:the )?(next|previous|prev|older|newer) (?:page|results?|posts?)|page (next|back)', t, re.I)
+    if m:
+        word = (m[1] or m[2]).lower()
+        return {'action': 'click', 'target': 'Next' if word in ('next', 'older') else 'Previous', 'navigate': True}
+    m = re.fullmatch(r'(?:go to|open(?: up)?|show me|take me to|navigate to|bring up|jump to|head to|head over to|go into|open up)'
+                     r'(?: the| my| your)? (?P<x>.+?)(?: (?:page|tab|section|menu|link|button|area))?', t, re.I)
+    if not m:
+        return None
+    target = m['x'].strip()
+    lowered = target.lower()
+    from blok.desktop import catalog
+    known = (lowered in APPS or lowered in SITES or lowered.removesuffix('.com') in SITES or lowered in SITE_SEARCH
+             or lowered in SITE_ALIASES or lowered in catalog())
+    if known or re.fullmatch(r'(?:a |the )?(?:new |another )?tab|workspace \w+|top|bottom|it|that|this|there|here|back|home screen', lowered) \
+            or re.fullmatch(r'(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:/\S*)?', lowered) or ORDINAL_WORDS.search(lowered):
+        return None
+    return {'action': 'click', 'target': target, 'navigate': True}
+
+
+ORDINAL_WORDS = re.compile(r'\b(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) (?:result|video|link|one)\b', re.I)
+
 def resolve_intent(text: str, context: ConversationContext | None = None) -> ResolvedIntent:
     """Tier 1: Canonical deterministic intent resolution & slot extraction."""
     raw = text.strip()
@@ -776,6 +803,11 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     if hands_free:
         return ResolvedIntent(intent_type="hands_free:" + hands_free["tool"], entities=hands_free, confidence=0.95,
                               raw_text=raw, normalized_text=norm, action_kind="tool", action_value=json.dumps(hands_free))
+    # Getting around the page in front: "go to pricing", "open settings", "next page"
+    on_page = _page_navigation(norm, context)
+    if on_page:
+        return ResolvedIntent(intent_type="ui_control", entities=on_page, confidence=0.93, raw_text=raw,
+                              normalized_text=norm, action_kind="ui_control", action_value=json.dumps(on_page))
     # "click that button" → whatever the mouse is pointing at in the browser
     if re.fullmatch(r'(?:click|press|hit|tap|select|push)(?: on)? (?:that|this|it|here|there|the one under (?:the|my) (?:mouse|cursor|pointer))'
                     r'(?: (?:button|link|thing|one|tab|video|item|icon|option))?(?: (?:right )?(?:here|there))?', norm, re.I):

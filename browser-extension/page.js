@@ -57,12 +57,17 @@ export async function pageAction(request, captureErrors=false) {
     return items.map(e=>[e,Math.min(dist(shade(e)),dist(rgb(getComputedStyle(e).color)))]).sort((a,b)=>a[1]-b[1])[0][0];
   };
   const findTarget = request => {
-    const target=norm(request.target).replace(/^(the )/,'').replace(/ (button|link|field)$/,'');
+    const target=norm(request.target).replace(/^(the |my |your )/,'').replace(/ (button|link|field)$/,'');
     const role=request.role || (/ (field|button|link)$/.exec(norm(request.target))||[])[1];
     const eligible=request.action==='fill'||role==='field'?nodes.filter(editable):role==='button'?nodes.filter(e=>roleOf(e)==='button'):role==='link'?nodes.filter(e=>roleOf(e)==='link'):nodes;
     let matches=eligible.filter(e=>norm(name(e))===target);
     if(!matches.length) matches=eligible.filter(e=>norm(name(e)).includes(target));
     if(matches.length>1&&request.color) matches=[closestColor(matches,request.color)];
+    if(matches.length>1&&request.navigate) {
+      // "go to pricing": links and tabs first, then the topmost visible one (header over footer).
+      const navish=matches.filter(e=>['link','tab','menuitem'].includes(roleOf(e)));
+      matches=[(navish.length?navish:matches).sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top)[0]];
+    }
     if(matches.length!==1) throw Error(matches.length?'More than one control matches. Say its full label.':'No visible control named '+request.target);
     const e=matches[0];if(e.disabled||e.getAttribute('aria-disabled')==='true') throw Error('That control is disabled.');
     return e;

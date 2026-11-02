@@ -2,7 +2,7 @@
 
 **An offline Jarvis for Hyprland: it hears you, sees your screen, clicks, and talks back. No cloud, no API keys.**
 
-Tap <kbd>Ctrl</kbd>+<kbd>.</kbd> (or the mic) and talk the way you normally talk. BLoK stops listening by itself when you pause, like a phone assistant, so there's nothing to hold or click again. Holding the key while you speak works too. BLoK opens apps and sites, searches, plays music and videos, finds and edits your files, controls windows, volume and brightness, clicks the button you're pointing at, and tells you what it did. Speech recognition, decisions and the voice all run on your own computer.
+Tap <kbd>Ctrl</kbd>+<kbd>.</kbd> (or the mic) and talk the way you normally talk. BLoK stops listening by itself when you pause, like a phone assistant, so there's nothing to hold or click again. Holding the key while you speak works too. After it answers it keeps listening for your next command, so you can go on: “open a new tab” … “search for games” … “go to images”. Go quiet for 20 seconds, or say “thanks” or “that's all”, to end the conversation. BLoK opens apps and sites, searches, plays music and videos, finds and edits your files, controls windows, volume and brightness, clicks the button you're pointing at, and tells you what it did. Speech recognition, decisions and the voice all run on your own computer.
 
 <p align="center">
   <img src="docs/images/theme-omarchy.png" width="420" alt="BLoK in the Omarchy theme"><br>
@@ -65,6 +65,7 @@ No GPU and no screenshots sent anywhere: in the browser BLoK reads the page's ow
 | “what does this error mean?” (in a terminal or editor) | finds the error on screen and explains it |
 | “what's the price here?” · “on this page, who wrote it?” | answers from the page |
 | “click the blue Download button” | the color picks between same-named buttons |
+| “go to pricing” · “open settings” · “take me to my orders” · “next page” | clicks that link or button on the page in front (the topmost one if there are several) |
 | “click Save” in an app without accessibility labels | finds the word on screen and puts the pointer on it (clicks too if `ydotool` is installed) |
 
 With Ollama running, the local Qwen model writes the summaries and explanations; without it BLoK picks the most relevant sentences and recognises prices, dates, emails and phone numbers. Screen text is never stored. In Hinglish: “ye page kis baare mein hai”, “padh ke sunao”, “ye error kya hai”.
@@ -102,7 +103,7 @@ Spoken Hinglish needs the multilingual Whisper model (installer option 4, 465 MB
 
 ## Hands-free
 
-Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for its name; no keyboard needed. Start with **“hey block”**, then keep going for 8 seconds without repeating it.
+Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for its name; no keyboard needed. Start with **“hey block”** and the overlay pops open. After BLoK has answered, you have 20 seconds to say the next thing without the name, so “hey block, open a new tab” … “search for games” … “open the second result” flows like a conversation. If it ever ignores you, `blok heard` lists what it heard recently and whether it acted.
 
 | Say | Does |
 |---|---|
@@ -194,6 +195,7 @@ Ctrl+. ─► Whisper (local) ─► speech cleanup ─► rules ─────
 | `BLOK_TTS=0` | Silence spoken replies (`blok voice off` does the same) |
 | `BLOK_REPHRASE=0` / `BLOK_REPHRASE_MODEL` | Turn off or choose the Ollama rephraser |
 | `BLOK_END_SILENCE` | Pause (seconds, default 1.0) that ends a command |
+| `BLOK_FOLLOW_UP` / `BLOK_CONVERSATION=0` | How long to wait for a follow-up (seconds, default 20) / turn conversation mode off |
 | `BLOK_STT=voxtype` | Use a running Voxtype daemon instead of built-in Whisper |
 | `BLOK_HOME` / `BLOK_DATA` | Where models, the Python environment and your data live |
 | `BLOK_REDUCED_MOTION=1` | No reveal or ring animation |

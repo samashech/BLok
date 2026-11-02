@@ -61,6 +61,8 @@ class Backend:
         # Only the running app probes the desktop and browser; tests and scripts don't.
         self.live = False
         self.hands_free = None
+        self.input_source = "typed"
+        self.follow_up_pending = False
         from blok.voice import Speaker
         # Silent until main() runs, so tests and scripts never talk.
         self.speaker = Speaker(DATA / 'settings.json', on_notice=lambda message: self.emit(type="engine", message=message), enabled=False)
@@ -78,14 +80,21 @@ class Backend:
             captured.append(event)
         # Talk back: every user-facing result is spoken, except per-step
         # messages inside a plan, which are summarised once at the end.
-        if event.get("type") == "action" and getattr(self.worker_context, "in_plan", False):
+        if event.get("type") != "action":
+            return
+        if getattr(self.worker_context, "in_plan", False):
             self.plan_messages.append(event.get("message", ""))
-        elif event.get("type") == "action" and event.get("message"):
+            return
+        if event.get("message"):
             reading, self.read_next = getattr(self, 'read_next', None), None
             if reading and not event.get("error"):
                 self.speaker.read_aloud(reading)
             else:
                 self.say_result(event["message"], error=bool(event.get("error")))
+        # Conversation mode: once this answer is done, listen for the next command
+        # (not for results gathered on behalf of an AI client over MCP).
+        if captured is None:
+            self.schedule_follow_up()
 
     def status(self, state, message):
         self.emit(type="status", state=state, message=message)
@@ -174,7 +183,7 @@ class Backend:
         self.emit(type="level", value=0)
         self.status("ready", "Microphone off")
 
-    def listen(self):
+    def listen(self, follow_up=False):
         if self.listening:
             return
         from blok.speech import new_session
@@ -182,6 +191,10 @@ class Backend:
         generation = self.generation
         # The mic level drives the orb, so you can see BLoK hearing you.
         voice = new_session(on_level=lambda value: self.events.put((generation, {"type": "level", "value": value})))
+        if follow_up:
+            # A follow-up waits a while for you to speak, and simply ends if you don't.
+            voice.follow_up = True
+            voice.NO_SPEECH_SECONDS = float(os.environ.get('BLOK_FOLLOW_UP', '20'))
         try:
             voice.start()
         except Exception:
@@ -189,7 +202,7 @@ class Backend:
             raise
         self.voice = voice
         self.listening = True
-        self.status("listening", "Listening… I'll stop when you pause")
+        self.status("listening", "Anything else? I'm listening…" if follow_up else "Listening… I'll stop when you pause")
         def watch():
             try:
                 text = voice.wait(lambda: generation == self.generation,
@@ -319,6 +332,43 @@ class Backend:
             plan = decision.action
         return self.run_action(plan)
 
+    def schedule_follow_up(self):
+        """After a spoken command has been answered, listen for the next one (conversation mode).
+
+        Waits until BLoK has finished acting and talking, so it never hears itself.
+        Hands-free reopens its no-name window; a tap or Ctrl+. starts listening again.
+        """
+        source = getattr(self, "input_source", "typed")
+        if source not in ("voice", "hands_free") or os.environ.get("BLOK_CONVERSATION") == "0" or not self.live:
+            return
+        if getattr(self, "follow_up_pending", False):
+            return
+        self.follow_up_pending = True
+        def wait():
+            try:
+                deadline = time.monotonic() + 90
+                time.sleep(0.4)          # let the reply start speaking
+                while time.monotonic() < deadline and (self.speaker.speaking() or self.actions_pending or self.pending):
+                    time.sleep(0.1)
+                self.events.put((None, {"command": "follow_up", "source": source}))
+            finally:
+                self.follow_up_pending = False
+        threading.Thread(target=wait, daemon=True).start()
+
+    def start_follow_up(self, source):
+        # "stop" or "thanks" since then ended the conversation; so does a pending approval card.
+        if self.input_source not in ("voice", "hands_free") or self.listening or self.voice is not None \
+                or self.has_pending_approval():
+            return
+        if self.hands_free is not None:
+            self.hands_free.listen_for_follow_up()
+            self.emit(type="activity", state="idle", message="Listening for your next command…")
+        elif source == "voice" and self.hands_free is None:
+            try:
+                self.listen(follow_up=True)
+            except Exception as error:
+                self.emit(type="engine", message="Follow-up listening failed: " + str(error))
+
     def say_result(self, message, error=False):
         """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
         from blok.voice import spoken
@@ -343,6 +393,8 @@ class Backend:
         if said:
             summary = said[-1] if not ok else (', then '.join(said[-2:]) if len(said) > 1 else said[0])
             self.say_result(summary, error=not ok)
+        if getattr(self.worker_context, "capture", None) is None:
+            self.schedule_follow_up()
         return ok
 
     def _execute_plan(self, plan):
@@ -1302,9 +1354,17 @@ class Backend:
                                  "laya", decision.intent, decision.probability, [], "failed", timer.finish(), ambiguity_reason=decision.reason)
         self.emit(type="activity", state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
 
-    def transcript(self, text, final):
+    END_CONVERSATION = re.compile(r"(?:stop|thanks|thank you|that'?s all|that'?s it|nothing|never ?mind|no thanks|bas|bas karo|shukriya|dhanyavaad|ok(?:ay)? thanks?)[.!]?", re.I)
+
+    def transcript(self, text, final, source="typed"):
         self.emit(type="transcript", text=text, final=final)
         if not final:
+            return
+        self.input_source = source
+        if source != "typed" and self.END_CONVERSATION.fullmatch(text.strip()):
+            self.input_source = "typed"         # ends the conversation: no follow-up
+            self.stop()
+            self.speaker.say("Okay.")
             return
         # Stop is an immediate control, so a slow/failed model can never trap the mic.
         if text.strip().lower().strip(" .!?,") == "stop listening":
@@ -1342,7 +1402,7 @@ class Backend:
         elif command == "finish": self.finish_recording()
         elif command == "text":
             if self.listening or self.voice is not None: self.stop()
-            self.transcript(str(request.get("text", ""))[:4000], True)
+            self.transcript(str(request.get("text", ""))[:4000], True, source=str(request.get("source", "typed")))
         elif command in ("approve", "reject"):
             approval_id = request.get("id") or request.get("approval_id")
             approved = (command == "approve")
@@ -1422,7 +1482,10 @@ class Backend:
                         continue
                     if event.get("command") == "hands_free_text":
                         self.emit(type="wake")
-                        self.transcript(event["text"], True)
+                        self.transcript(event["text"], True, source="hands_free")
+                        continue
+                    if event.get("command") == "follow_up":
+                        self.start_follow_up(event.get("source"))
                         continue
                     try: self.request(event)
                     except Exception as error: self.emit(type="action", error=True, message=str(error))
@@ -1444,14 +1507,16 @@ class Backend:
                         self.status("processing", "Transcribing locally…")
                         self.emit(type="activity", state="transcribing", message="Whisper is transcribing locally…")
                     elif event["type"] == "speech_text":
+                        follow_up = getattr(self.voice, 'follow_up', False)
                         self.voice = None
                         self.listening = False
                         self.status("ready", "Microphone off")
                         self.emit(type="activity", state="idle")
                         if event["text"]:
-                            self.transcript(event["text"], True)
-                        else:
+                            self.transcript(event["text"], True, source="voice")
+                        elif not follow_up:
                             self.emit(type="action", error=True, message="I didn't hear anything. Tap the mic or press Ctrl+. and speak.")
+                        # A quiet follow-up just ends the conversation.
                     elif event["type"] == "error":
                         self.stop()
                         self.status("error", event["message"])

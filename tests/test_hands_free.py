@@ -26,11 +26,15 @@ class ListenerTests(unittest.TestCase):
 
     def test_wake_command_and_follow_ups(self):
         heard = self.listener()
-        with patch.object(speech, 'transcribe', side_effect=['Hey Block, show numbers.', 'twelve', 'nice weather today']):
-            heard.handle(numpy.zeros(1)); heard.handle(numpy.zeros(1))
-            heard.follow_until = 0          # follow-up window expired
+        with patch.object(speech, 'transcribe', side_effect=['Hey Block, show numbers.', 'twelve', 'nice weather today', 'okay']):
+            heard.handle(numpy.zeros(1))
+            heard.listen_for_follow_up()    # BLoK answered: the next command needs no name
+            heard.handle(numpy.zeros(1))
+            heard.handle(numpy.zeros(1))    # the window closes after one follow-up until BLoK answers again
+            heard.listen_for_follow_up(); heard.follow_until = 0   # …or when it runs out
             heard.handle(numpy.zeros(1))
         self.assertEqual(self.commands, ['show numbers', 'twelve'])
+        self.assertEqual([h['acted'] for h in heard.heard], [True, True, False, False])
 
     def test_name_alone_wakes(self):
         heard = self.listener()

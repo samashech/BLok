@@ -117,7 +117,7 @@ class VoxtypeSession:
 
 ROOT = Path(__file__).resolve().parent.parent
 # Names Whisper should spell the way BLoK expects.
-VOCABULARY = ('BLoK, Laya, Omarchy, Hyprland, YouTube, Spotify, Steam, GitHub, Obsidian, Reddit, '
+VOCABULARY = ('Hey Block, BLoK, Laya, Omarchy, Hyprland, YouTube, Spotify, Steam, GitHub, Obsidian, Reddit, '
               'PewDiePie, Brave, VS Code, Nautilus, workspace, open, search, play.')
 WORDS_FILE = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'blok' / 'words.txt'
 
@@ -393,6 +393,28 @@ def new_session(on_level=None):
 
 # Whisper's spellings of "BLoK"; the bare name must open the utterance.
 WAKE = re.compile(r"^\W*(?:(?:hey|hi|okay|ok|yo)[\s,]+(?:block|blok|bloc|blog|bloke|black|blocks)|block|blok)\b[\s,.!?]*", re.I)
+GREETINGS = {'hey', 'hi', 'hay', 'he', 'a', 'ok', 'okay', 'yo', 'hello', 'hei', 'heyy', 'oye', 'arey', 'are'}
+NAMES = {'block', 'blok', 'bloc', 'blog', 'bloke', 'blocks', 'blox', 'blokk', 'bloch', 'blogg'}
+NEAR_NAMES = NAMES | {'black', 'brock', 'glock', 'plock', 'flock', 'clock', 'blake', 'blob', 'bloque', 'block.'}
+
+
+def wake(text: str) -> tuple[bool, str]:
+    """Did the utterance start by addressing BLoK? Returns (woke, the command after the name).
+
+    Whisper spells the name many ways ("Hey Blok", "hey, bloc", "A block", "Hey black"),
+    so after a greeting a near spelling counts; without one, only a clear "block" does.
+    """
+    from difflib import SequenceMatcher
+    words = list(re.finditer(r"[\w']+", text))
+    for i, word in enumerate(words[:3]):
+        token = word.group(0).lower()
+        greeted = i > 0 and words[i - 1].group(0).lower() in GREETINGS
+        close = token in NEAR_NAMES or SequenceMatcher(None, token, 'block').ratio() >= 0.75
+        if (token in NAMES and (i == 0 or greeted)) or (greeted and close):
+            return True, text[word.end():].strip(' ,.!?')
+        if i == 0 and token not in GREETINGS:
+            break
+    return False, text
 
 
 class HandsFreeListener:
@@ -403,7 +425,7 @@ class HandsFreeListener:
     and audio that doesn't address BLoK is dropped immediately.
     """
     FRAME = 480                 # 30 ms
-    FOLLOW_UP_SECONDS = 8.0
+    FOLLOW_UP_SECONDS = 20.0    # after BLoK has finished acting and talking
 
     def __init__(self, on_command, on_wake=None, paused=lambda: False):
         self.on_command = on_command
@@ -413,6 +435,9 @@ class HandsFreeListener:
         self.thread = None
         self.running = False
         self.follow_until = 0.0
+        # What hands-free heard lately, in memory only, for "blok heard".
+        import collections
+        self.heard = collections.deque(maxlen=12)
 
     def start(self):
         recorder = shutil.which('pw-record')
@@ -460,14 +485,21 @@ class HandsFreeListener:
         if not text:
             return
         now = time.monotonic()
-        wake = WAKE.match(text)
-        if wake:
-            command = text[wake.end():].strip(' ,.!?')
-            self.follow_until = now + self.FOLLOW_UP_SECONDS
+        woke, command = wake(text)
+        following = now < self.follow_until
+        self.heard.append({'at': time.strftime('%H:%M:%S'), 'text': text,
+                           'acted': woke or following})
+        if woke:
+            self.follow_until = 0.0         # reopened once BLoK has answered
             if command:
                 self.on_command(command)
             else:
+                self.follow_until = now + self.FOLLOW_UP_SECONDS
                 self.on_wake()
-        elif now < self.follow_until:
-            self.follow_until = now + self.FOLLOW_UP_SECONDS
+        elif following:
+            self.follow_until = 0.0
             self.on_command(text.strip(' ,.!?'))
+
+    def listen_for_follow_up(self, seconds: float | None = None):
+        """Accept the next command without the name for a while (called once BLoK has answered)."""
+        self.follow_until = time.monotonic() + (seconds or self.FOLLOW_UP_SECONDS)

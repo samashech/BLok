@@ -161,4 +161,11 @@ try{
  assert.equal(await page.evaluate(()=>document.body.dataset.sent),'999/');
  assert.equal(await page.evaluate(pageAction,{op:'find_control',name:'Delete',role:'button'}),false);
  console.log('PASS: watch me records names and values (never passwords), and replay finds the same controls again');
+ await page.setContent(`<header><a href="#p" onclick="document.body.dataset.went='header'">Pricing</a> <a href="#d">Docs</a></header>
+   <main style="height:1500px"><button onclick="document.body.dataset.went='button'">See pricing details</button></main>
+   <footer><a href="#p2" onclick="document.body.dataset.went='footer'">Pricing</a></footer>`);
+ await page.evaluate(pageAction,{op:'click',target:'pricing',navigate:true});
+ assert.equal(await page.evaluate(()=>document.body.dataset.went),'header');
+ await assert.rejects(page.evaluate(pageAction,{op:'click',target:'pricing'}),/More than one/);   // plain "click" stays strict
+ console.log('PASS: "go to pricing" picks the topmost matching link');
 }finally{await browser.close();}

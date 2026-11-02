@@ -31,6 +31,21 @@ case "${1:-show}" in
   mic-test) exec "$BLOK_PYTHON" scripts/check_mic.py "${2:-4}" ;;
   commands) exec "$BLOK_PYTHON" -m blok.plugins ;;
   mcp) exec "$BLOK_PYTHON" -m blok.mcp ;;
+  heard) exec "$BLOK_PYTHON" - <<'PY'
+import json, socket
+from blok.mcp_bridge import SOCKET
+try:
+    with socket.socket(socket.AF_UNIX) as conn:
+        conn.connect(str(SOCKET)); conn.sendall(b'{"internal": "heard"}\n')
+        reply = json.loads(conn.makefile('rb').readline())
+except OSError:
+    raise SystemExit('BLoK is not running.')
+if not reply['on']:
+    print('Hands-free is off. Say "hands free on" or run: blok handsfree on')
+for item in reply['heard'] or [{'at': '', 'text': '(nothing heard yet)', 'acted': False}]:
+    print(f"{item['at']}  {'acted  ' if item['acted'] else 'ignored'}  {item['text']}")
+PY
+  ;;
   handsfree) quickshell ipc -p "$BLOK_ROOT/ui" call blok handsfree "${2:?Choose on or off}" ;;
   setup) shift; exec "$BLOK_ROOT/install.sh" "$@" ;;
   voice) quickshell ipc -p "$BLOK_ROOT/ui" call blok voice "${2:?Choose kokoro, elevenlabs, local or off}" ;;
@@ -41,5 +56,5 @@ case "${1:-show}" in
     printf '%s' "$key" | "$BLOK_PYTHON" -c 'import sys; sys.path.insert(0, "'"$BLOK_ROOT"'"); from blok.voice import save_key; save_key(sys.stdin.read())'
     echo 'Saved. Restart BLoK (blok quit; blok) to use the ElevenLabs voice.' ;;
   text) quickshell ipc -p "$BLOK_ROOT/ui" call blok text "${2:?Provide a command}" ;;
-  *) echo 'Usage: blok [show|toggle|hide|quit|foreground|theme <omarchy|liquid|halloween|diwali|minecraft|next>|voice <kokoro|elevenlabs|local|off>|elevenlabs-key|mic-test|commands|mcp|handsfree on|off|setup|text "command"]' >&2; exit 2 ;;
+  *) echo 'Usage: blok [show|toggle|hide|quit|foreground|theme <omarchy|liquid|halloween|diwali|minecraft|next>|voice <kokoro|elevenlabs|local|off>|elevenlabs-key|mic-test|heard|commands|mcp|handsfree on|off|setup|text "command"]' >&2; exit 2 ;;
 esac
