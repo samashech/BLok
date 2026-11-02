@@ -69,9 +69,10 @@ class ListenerTests(unittest.TestCase):
         stream = numpy.concatenate([noise(1.0), voice, noise(1.5)])
         heard.process = Mock(stdout=io.BytesIO((stream * 32767).astype('<i2').tobytes()))
         heard.running = True
-        segments = []
-        heard.handle = segments.append
         heard._loop()
+        segments = []
+        while not heard.queue.empty():
+            segments.append(heard.queue.get_nowait()[0])
         self.assertEqual(len(segments), 1)
         self.assertAlmostEqual(len(segments[0]) / 16000, 1.0 + 0.7 + 0.3, delta=0.25)  # voice + tail + pre-roll
 
@@ -81,9 +82,32 @@ class ListenerTests(unittest.TestCase):
         heard.process = Mock(stdout=io.BytesIO((numpy.sin(numpy.arange(32000) / 6) * 0.2 * 32767).astype('<i2').tobytes()
                                                + b'\x00' * 32000))
         heard.running = True
-        with patch.object(heard, 'handle') as handle:
-            heard._loop()
-        handle.assert_not_called()
+        heard._loop()
+        self.assertTrue(heard.queue.empty())
+
+    def test_own_voice_is_not_glued_to_the_next_command(self):
+        heard = self.listener()
+        speaking = [True]
+        heard.paused = lambda: speaking[0]
+        tone = lambda seconds: numpy.sin(numpy.arange(int(16000 * seconds)) / 6) * 0.2
+        quiet = lambda seconds: numpy.zeros(int(16000 * seconds))
+        # BLoK's reply runs straight into your command; only the command reaches Whisper.
+        frames = [(tone(1.0), True), (tone(1.0), False), (quiet(1.0), False)]
+        data = b''.join((chunk * 32767).astype('<i2').tobytes() for chunk, _ in frames)
+        flags = [paused for chunk, paused in frames for _ in range(len(chunk) // heard.FRAME)]
+        heard.paused = lambda: flags.pop(0) if flags else False
+        heard.process = Mock(stdout=io.BytesIO(data))
+        heard.running = True
+        heard._loop()
+        audio, _ = heard.queue.get_nowait()
+        self.assertLess(len(audio) / 16000, 1.0 + 0.7 + 0.1)
+
+    def test_name_anywhere_in_the_utterance(self):
+        heard = self.listener()
+        with patch.object(speech, 'transcribe', side_effect=["It doesn't work. Hey Block.", 'blah, hey block, open YouTube']):
+            heard.handle(numpy.zeros(1))
+            heard.handle(numpy.zeros(1))
+        self.assertEqual((self.wakes, self.commands), ([False], ['open YouTube']))
 
 
 class HandsFreeToolTests(unittest.TestCase):

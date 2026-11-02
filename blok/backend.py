@@ -24,6 +24,17 @@ from blok.recording import SessionActionRecorder, compile_routine
 ROOT = Path(__file__).resolve().parent.parent
 from blok.paths import DATA
 
+
+def same_results(url, original):
+    """Is `url` still the results page at `original`? Google and YouTube add tracking params
+    (sxsrf, ei, pp, #fragment) after loading, so compare host, path and the query itself."""
+    from urllib.parse import urlsplit, parse_qs
+    a, b = urlsplit(url), urlsplit(original)
+    if (a.netloc, a.path.rstrip('/')) != (b.netloc, b.path.rstrip('/')):
+        return False
+    qa, qb = parse_qs(a.query), parse_qs(b.query)
+    return all(qa.get(key) == qb.get(key) for key in ('q', 'search_query', 'tbm', 'udm', 'start', 'list'))
+
 class Backend:
     def __init__(self):
         self.output_lock = threading.Lock()
@@ -1154,10 +1165,11 @@ class Backend:
             self.context.clear_search_context()
             raise RuntimeError('No current search results. Search Google or YouTube, then choose a result within five minutes.')
         observation=browser.request({'action':'inspect'},on_progress=lambda event:None)
-        if (observation.get('tabId') != context['tabId'] or observation.get('url') != context['url']):
+        if observation.get('tabId') != context['tabId'] or not same_results(observation.get('url') or '', context['url']):
             self.browser_context=None
             self.context.clear_search_context()
             raise RuntimeError('Those search results are no longer current. Search again before choosing a result.')
+        context['url']=observation['url']   # the extension checks the exact URL; Google rewrites its params
         return {key:context[key] for key in ('tabId','url','site','query')}
 
     @staticmethod

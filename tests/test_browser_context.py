@@ -60,5 +60,16 @@ class BrowserContextTests(unittest.TestCase):
                             for call in self.backend.emit.call_args_list))
 
 
+
+
+class SameResultsTests(unittest.TestCase):
+    def test_tracking_params_do_not_make_results_stale(self):
+        from blok.backend import same_results
+        self.assertTrue(same_results('https://www.google.com/search?q=games&sxsrf=AB&ei=x#ip=1', 'https://www.google.com/search?q=games'))
+        self.assertTrue(same_results('https://www.youtube.com/results?search_query=bbs&sp=EgI', 'https://www.youtube.com/results?search_query=bbs'))
+        self.assertFalse(same_results('https://www.google.com/search?q=cats', 'https://www.google.com/search?q=games'))
+        self.assertFalse(same_results('https://www.google.com/search?q=games&start=10', 'https://www.google.com/search?q=games'))
+
+
 if __name__ == '__main__':
     unittest.main()

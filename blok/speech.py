@@ -469,21 +469,22 @@ def clean_command(rest: str) -> str:
 
 
 def wake(text: str) -> tuple[bool, str]:
-    """Did the utterance start by addressing BLoK? Returns (woke, the command after the name).
+    """Did the utterance address BLoK? Returns (woke, the command after the name).
 
     Whisper spells the name many ways ("Hey Blok", "hey, bloc", "A block", "Hey black"),
-    so after a greeting a near spelling counts; without one, only a clear "block" does.
+    so after a greeting a near spelling counts; a bare "block" only counts as the very
+    first word. With people talking nearby, the name often lands mid-utterance
+    ("… it doesn't work. Hey Block, open YouTube"), so the whole utterance is searched
+    and only what follows the name is the command.
     """
     from difflib import SequenceMatcher
     words = list(re.finditer(r"[\w']+", text))
-    for i, word in enumerate(words[:3]):
+    for i, word in enumerate(words):
         token = word.group(0).lower()
         greeted = i > 0 and words[i - 1].group(0).lower() in GREETINGS
         close = token in NEAR_NAMES or SequenceMatcher(None, token, 'block').ratio() >= 0.75
-        if (token in NAMES and (i == 0 or greeted)) or (greeted and close):
+        if (token in NAMES and i == 0) or (greeted and (token in NAMES or close)):
             return True, clean_command(text[word.end():])
-        if i == 0 and token not in GREETINGS:
-            break
     return False, text
 
 
@@ -506,6 +507,8 @@ class HandsFreeListener:
         self.thread = None
         self.running = False
         self.follow_until = 0.0
+        import queue
+        self.queue = queue.Queue()
         # What hands-free heard lately, in memory only, for "blok heard".
         import collections
         self.heard = collections.deque(maxlen=12)
@@ -517,9 +520,22 @@ class HandsFreeListener:
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.thread = threading.Thread(target=self._loop, daemon=True)
         self.thread.start()
+        threading.Thread(target=self._work, daemon=True).start()
+
+    def _work(self):
+        while self.running:
+            item = self.queue.get()
+            if item is None:
+                return
+            audio, addressed = item
+            try:
+                self.handle(audio, addressed)
+            except Exception:
+                pass
 
     def stop(self):
         self.running = False
+        self.queue.put(None)
         if self.process and self.process.poll() is None:
             self.process.kill()
             self.process.wait()
@@ -535,21 +551,29 @@ class HandsFreeListener:
                 break
             frame = numpy.frombuffer(chunk, dtype='<i2').astype('float32') / 32768.0
             event = endpointer.feed(frame)
+            if self.paused():
+                # BLoK is talking (or a tap recording owns the mic): drop what the mic hears, so its
+                # own voice never sticks to the front of your next command.
+                segment = None
+                pre_roll.clear()
+                endpointer.reset()
+                continue
             if segment is None:
                 pre_roll.append(frame)
                 if event == 'start':
                     segment = list(pre_roll)
                 continue
             segment.append(frame)
-            if len(segment) == 35 and not self.paused():   # ~1 s in (with pre-roll): is this "hey block"?
+            if len(segment) == 35:   # ~1 s in (with pre-roll): is this "hey block"?
                 self._spot(numpy.concatenate(segment))
             if event == 'end' or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
                 audio = numpy.concatenate(segment)
                 segment = None
                 pre_roll.clear()
                 endpointer.reset()
-                if not self.paused():
-                    self.handle(audio)
+                # Transcribe on another thread: the mic pipe holds ~2 s, and a command said right
+                # after "hey block" must not be lost while Whisper works on the name.
+                self.queue.put((audio, self.addressed))
                 self.addressed = False
 
     def _spot(self, audio):
@@ -563,13 +587,13 @@ class HandsFreeListener:
                 pass
         threading.Thread(target=run, daemon=True).start()
 
-    def handle(self, audio):
+    def handle(self, audio, addressed=None):
         text = transcribe(audio)
         if not text:
             return
         now = time.monotonic()
         woke, command = wake(text)
-        if not woke and getattr(self, 'addressed', False):
+        if not woke and (self.addressed if addressed is None else addressed):
             # The fast check heard the name even if the full transcript spells it oddly.
             woke, command = True, clean_command(' '.join(text.split()[1:]) if len(text.split()) > 1 else '')
         following = now < self.follow_until
