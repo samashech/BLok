@@ -11,6 +11,14 @@ from blok.backend import Backend
 from blok.speech import WAKE, HandsFreeListener
 
 
+def tone(seconds):
+    return numpy.sin(numpy.arange(int(16000 * seconds)) / 6) * 0.2
+
+
+def noise(seconds):
+    return numpy.random.default_rng(0).standard_normal(int(16000 * seconds)) * 0.001
+
+
 class WakeTests(unittest.TestCase):
     def test_wake_variants(self):
         for said in ('Hey Block, open YouTube.', 'okay blok scroll down', 'Block, numbers', 'Hey black, what time is it?'):
@@ -19,7 +27,35 @@ class WakeTests(unittest.TestCase):
             self.assertFalse(WAKE.match(said), said)
 
 
+class VoiceDetectorTests(unittest.TestCase):
+    def test_endpointer_keeps_going_on_a_lower_bar_than_it_starts(self):
+        probabilities = iter([0.4] * 5 + [0.6] * 3 + [0.4] * 5 + [0.1] * 3)
+        pointer = speech.Endpointer(0.096, detector=lambda frame: next(probabilities))
+        events = [pointer.feed(numpy.zeros(speech.FRAME)) for _ in range(16)]
+        self.assertEqual([i for i, event in enumerate(events) if event == 'start'], [7])   # 0.4 can't start speech
+        self.assertEqual([i for i, event in enumerate(events) if event == 'end'], [15])    # but it doesn't end it
+
+    def test_silero_ignores_loud_noise(self):
+        detector = speech.voice_detector()
+        if detector is None:
+            self.skipTest('Silero VAD is not available')
+        pointer = speech.Endpointer(1.0, detector)
+        loud = (numpy.random.default_rng(0).standard_normal(16000 * 3) * 0.05).astype('float32')
+        events = [pointer.feed(loud[i:i + speech.FRAME]) for i in range(0, len(loud) - speech.FRAME, speech.FRAME)]
+        self.assertNotIn('start', events)
+
+    def test_falls_back_to_loudness_when_asked(self):
+        with patch.dict('os.environ', {'BLOK_VAD': 'loudness'}):
+            self.assertIsNone(speech.voice_detector())
+
+
 class ListenerTests(unittest.TestCase):
+    def setUp(self):
+        # These streams use tones for "voice", which Silero rightly rejects: test the shared logic on loudness.
+        patcher = patch.dict('os.environ', {'BLOK_VAD': 'loudness'})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def listener(self):
         self.commands, self.wakes = [], []
         return HandsFreeListener(self.commands.append, lambda early=False: self.wakes.append(early))
@@ -61,20 +97,30 @@ class ListenerTests(unittest.TestCase):
             heard.handle(numpy.zeros(1))
         self.assertEqual(self.commands, ['open the terminal'])
 
-    def test_segmenter_cuts_one_utterance_from_a_stream(self):
-        heard = self.listener()
-        rng = numpy.random.default_rng(0)
-        noise = lambda seconds: rng.standard_normal(int(16000 * seconds)) * 0.001
-        voice = numpy.sin(numpy.arange(int(16000 * 1.0)) / 6) * 0.2
-        stream = numpy.concatenate([noise(1.0), voice, noise(1.5)])
+    def run_stream(self, heard, *parts, paused=None):
+        """Run the listener over audio; returns the length in seconds of each utterance sent to Whisper."""
+        stream = numpy.concatenate(parts)
         heard.process = Mock(stdout=io.BytesIO((stream * 32767).astype('<i2').tobytes()))
         heard.running = True
-        heard._loop()
-        segments = []
-        while not heard.queue.empty():
-            segments.append(heard.queue.get_nowait()[0])
-        self.assertEqual(len(segments), 1)
-        self.assertAlmostEqual(len(segments[0]) / 16000, 1.0 + 0.7 + 0.3, delta=0.25)  # voice + tail + pre-roll
+        if paused:
+            heard.paused = paused
+        with patch.object(speech, 'transcribe', side_effect=lambda audio: len(audio) / 16000):
+            heard._loop()
+            lengths = []
+            while not heard.queue.empty():
+                item = heard.queue.get_nowait()[0]
+                lengths.append(item.result() if hasattr(item, 'result') else len(item) / 16000)
+        return lengths
+
+    def test_segmenter_cuts_one_utterance_from_a_stream(self):
+        lengths = self.run_stream(self.listener(), noise(1.0), tone(1.0), noise(1.5))
+        self.assertEqual(len(lengths), 1)
+        self.assertAlmostEqual(lengths[0], 1.0 + 0.25 + 0.3, delta=0.2)  # voice + early-transcript tail + pre-roll
+
+    def test_carrying_on_talking_drops_the_early_transcript(self):
+        lengths = self.run_stream(self.listener(), noise(0.5), tone(1.0), noise(0.6), tone(1.0), noise(1.5))
+        self.assertEqual(len(lengths), 1)
+        self.assertGreater(lengths[0], 2.6)   # the whole thing, not just the part before the short pause
 
     def test_paused_while_speaking(self):
         heard = self.listener()
@@ -86,21 +132,12 @@ class ListenerTests(unittest.TestCase):
         self.assertTrue(heard.queue.empty())
 
     def test_own_voice_is_not_glued_to_the_next_command(self):
-        heard = self.listener()
-        speaking = [True]
-        heard.paused = lambda: speaking[0]
-        tone = lambda seconds: numpy.sin(numpy.arange(int(16000 * seconds)) / 6) * 0.2
-        quiet = lambda seconds: numpy.zeros(int(16000 * seconds))
         # BLoK's reply runs straight into your command; only the command reaches Whisper.
-        frames = [(tone(1.0), True), (tone(1.0), False), (quiet(1.0), False)]
-        data = b''.join((chunk * 32767).astype('<i2').tobytes() for chunk, _ in frames)
-        flags = [paused for chunk, paused in frames for _ in range(len(chunk) // heard.FRAME)]
-        heard.paused = lambda: flags.pop(0) if flags else False
-        heard.process = Mock(stdout=io.BytesIO(data))
-        heard.running = True
-        heard._loop()
-        audio, _ = heard.queue.get_nowait()
-        self.assertLess(len(audio) / 16000, 1.0 + 0.7 + 0.1)
+        flags = [True] * round(1.0 * 16000 / HandsFreeListener.FRAME)
+        lengths = self.run_stream(self.listener(), tone(1.0), tone(1.0), numpy.zeros(int(16000 * 1.3)),
+                                  paused=lambda: flags.pop() if flags else False)
+        self.assertEqual(len(lengths), 1)
+        self.assertLess(lengths[0], 1.5)
 
     def test_name_anywhere_in_the_utterance(self):
         heard = self.listener()

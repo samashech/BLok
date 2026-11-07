@@ -286,18 +286,71 @@ def record_command(destination: str = '-') -> list[str]:
     return [recorder, *microphone(), '--rate', '16000', '--channels', '1', '--format', 's16', destination]
 
 
-class Endpointer:
-    """Frame by frame (30 ms), decides when speech starts and when it has ended.
+FRAME = 512                     # 32 ms at 16 kHz, the frame Silero VAD works on
+END_SECONDS = float(os.environ.get('BLOK_END_SILENCE', '1.0'))   # a pause this long ends a command
+SPECULATE_SECONDS = 0.25        # start transcribing this far into a pause
 
-    It follows the room's noise floor slowly, counts a run of loud frames as the
-    start of speech, and a run of quiet frames after that as its end, like a
-    phone assistant that stops listening when you pause.
+
+class VoiceDetector:
+    """Silero VAD (shipped inside faster-whisper, ~2 MB), one 32 ms frame at a time.
+
+    Unlike a loudness gate it tells a voice from fans, typing and music, so a
+    command ends when you stop talking, not when the room goes quiet.
     """
-    FRAME_SECONDS = 0.03
+    _session = None
+    _lock = threading.Lock()
 
-    def __init__(self, end_seconds: float = 0.7):
+    def __init__(self):
+        import numpy
+        with VoiceDetector._lock:
+            if VoiceDetector._session is None:
+                import onnxruntime
+                from faster_whisper.vad import get_assets_path
+                options = onnxruntime.SessionOptions()
+                options.inter_op_num_threads = options.intra_op_num_threads = 1
+                options.log_severity_level = 4
+                VoiceDetector._session = onnxruntime.InferenceSession(
+                    os.path.join(get_assets_path(), 'silero_vad_v6.onnx'),
+                    providers=['CPUExecutionProvider'], sess_options=options)
+        self.state = numpy.zeros((2, 1, 1, 128), dtype='float32')
+        self.context = numpy.zeros(64, dtype='float32')
+
+    def __call__(self, frame) -> float:
+        """Probability (0–1) that this frame is speech."""
+        import numpy
+        frame = frame.astype('float32')
+        audio = numpy.concatenate([self.context, frame])[None]
+        prob, h, c = self._session.run(None, {'input': audio, 'h': self.state[0], 'c': self.state[1]})
+        self.state = numpy.stack([h, c])
+        self.context = frame[-64:]
+        return float(numpy.asarray(prob).reshape(-1)[0])
+
+
+def voice_detector():
+    """A fresh Silero detector, or None to fall back to loudness (BLOK_VAD=loudness, or no model)."""
+    if os.environ.get('BLOK_VAD') == 'loudness':
+        return None
+    try:
+        return VoiceDetector()
+    except Exception:
+        return None
+
+
+class Endpointer:
+    """Frame by frame (32 ms), decides when speech starts and when it has ended.
+
+    With Silero, a frame counts as voice by the detector's probability (with a
+    lower bar to keep going than to start); without it, by loudness over a
+    slowly followed noise floor. A run of voiced frames starts speech and a run
+    of unvoiced ones after that ends it, like a phone assistant that stops
+    listening when you pause.
+    """
+    FRAME_SECONDS = FRAME / 16000
+
+    def __init__(self, end_seconds: float = END_SECONDS, detector=None):
         self.floor = 0.002
         self.level = 0.0
+        self.detector = detector
         self.end_frames = max(1, round(end_seconds / self.FRAME_SECONDS))
         self.reset()
 
@@ -308,9 +361,12 @@ class Endpointer:
         """'start' when speech begins, 'end' when it has ended, '' otherwise."""
         import numpy
         self.level = float(numpy.sqrt((frame ** 2).mean()))
-        loud = self.level > max(self.floor * 3, 0.004)
-        if not loud:
-            self.floor = self.floor * 0.995 + self.level * 0.005
+        if self.detector is not None:
+            loud = self.detector(frame) >= (0.35 if self.speaking else 0.5)
+        else:
+            loud = self.level > max(self.floor * 3, 0.004)
+            if not loud:
+                self.floor = self.floor * 0.995 + self.level * 0.005
         if not self.speaking:
             self.voiced = self.voiced + 1 if loud else 0
             if self.voiced >= 3:
@@ -324,6 +380,36 @@ class Endpointer:
         return ''
 
 
+class Speculation:
+    """Transcribe a quarter second into your pause instead of after the full second.
+
+    Whisper takes about 2 s here, so starting early means the text is mostly
+    ready when the pause is long enough to count. If you carry on talking the
+    early guess is dropped and the whole utterance is transcribed again later.
+    """
+    FRAMES = max(1, round(SPECULATE_SECONDS / Endpointer.FRAME_SECONDS))
+    _pool = None
+
+    def __init__(self):
+        self.future = None
+
+    def follow(self, endpointer, frames):
+        """Call after each frame of an utterance: starts or drops the early transcript."""
+        if endpointer.silent == self.FRAMES and endpointer.speaking:
+            import numpy
+            if Speculation._pool is None:
+                from concurrent.futures import ThreadPoolExecutor
+                Speculation._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='blok-speculate')
+            self.future = Speculation._pool.submit(transcribe, numpy.concatenate(frames))
+        elif endpointer.silent == 0 and self.future is not None:
+            self.future.cancel()      # you carried on talking; don't wait behind a stale guess
+            self.future = None
+
+    def take(self):
+        future, self.future = self.future, None
+        return future
+
+
 class WhisperSession:
     """Listen from a tap (or while Ctrl+. is held) and stop by itself when you pause.
 
@@ -331,7 +417,7 @@ class WhisperSession:
     about a second after you stop talking, gives up if nothing is said, and a
     manual stop still works. Nothing is written to disk.
     """
-    FRAME = 480
+    FRAME = FRAME
     MAX_SECONDS = 60
     NO_SPEECH_SECONDS = 7.0
     TAIL_SECONDS = 0.3
@@ -347,7 +433,8 @@ class WhisperSession:
         self.auto_stopped = False
         self.tail_until = 0.0
         self.on_level = on_level
-        self.end_silence = float(os.environ.get('BLOK_END_SILENCE', '1.0'))
+        self.end_silence = END_SECONDS
+        self.speculation = Speculation()
         try:
             self.model = 'Whisper ' + Path(whisper_model_path()).name.removeprefix('whisper-')
         except RuntimeError:
@@ -366,7 +453,7 @@ class WhisperSession:
 
     def _read(self):
         import numpy
-        endpointer = Endpointer(self.end_silence)
+        endpointer = Endpointer(self.end_silence, voice_detector())
         try:
             while True:
                 chunk = self.process.stdout.read(self.FRAME * 2)
@@ -380,6 +467,8 @@ class WhisperSession:
                     self.on_level(min(1.0, endpointer.level * 8))
                 if event == 'start':
                     self.heard_speech = True
+                if self.heard_speech and event != 'end':
+                    self.speculation.follow(endpointer, self.frames)
                 if self.stopped.is_set():
                     if now >= self.tail_until:   # a manual stop keeps a short tail
                         break
@@ -441,7 +530,8 @@ class WhisperSession:
             soundfile.write(str(Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'blok-last.wav'), audio, 16000)
         if len(audio) < 16000 * 0.3:
             return ''
-        return transcribe(audio)
+        early = self.speculation.take() if self.auto_stopped else None
+        return early.result() if early is not None else transcribe(audio)
 
     def close(self):
         with self.lock:
@@ -489,13 +579,13 @@ def wake(text: str) -> tuple[bool, str]:
 
 
 class HandsFreeListener:
-    """Always-on listening for "hey block …", with an 8 s window for follow-ups.
+    """Always-on listening for "hey block …", with a 20 s window for follow-ups.
 
-    PipeWire streams 16 kHz audio into memory; an adaptive loudness gate cuts it
-    into utterances and only those are transcribed. Nothing is written to disk,
+    PipeWire streams 16 kHz audio into memory; a voice detector cuts it into
+    utterances and only those are transcribed. Nothing is written to disk,
     and audio that doesn't address BLoK is dropped immediately.
     """
-    FRAME = 480                 # 30 ms
+    FRAME = FRAME               # 32 ms
     FOLLOW_UP_SECONDS = 20.0    # after BLoK has finished acting and talking
 
     def __init__(self, on_command, on_wake=None, paused=lambda: False):
@@ -543,8 +633,9 @@ class HandsFreeListener:
     def _loop(self):
         import collections
         import numpy
-        pre_roll = collections.deque(maxlen=10)          # 300 ms before speech starts
-        endpointer, segment = Endpointer(0.7), None
+        pre_roll = collections.deque(maxlen=10)          # 320 ms before speech starts
+        endpointer, segment = Endpointer(END_SECONDS, voice_detector()), None
+        speculation = Speculation()
         while self.running:
             chunk = self.process.stdout.read(self.FRAME * 2)
             if len(chunk) < self.FRAME * 2:
@@ -557,6 +648,7 @@ class HandsFreeListener:
                 segment = None
                 pre_roll.clear()
                 endpointer.reset()
+                speculation.take()
                 continue
             if segment is None:
                 pre_roll.append(frame)
@@ -566,8 +658,9 @@ class HandsFreeListener:
             segment.append(frame)
             if len(segment) == 35:   # ~1 s in (with pre-roll): is this "hey block"?
                 self._spot(numpy.concatenate(segment))
-            if event == 'end' or len(segment) >= 400:  # 0.7 s pause, or 12 s at most
-                audio = numpy.concatenate(segment)
+            if event == 'end' or len(segment) >= 400:  # a 1 s pause, or 12.8 s at most
+                early = speculation.take() if event == 'end' else None
+                audio = early if early is not None else numpy.concatenate(segment)
                 segment = None
                 pre_roll.clear()
                 endpointer.reset()
@@ -575,6 +668,8 @@ class HandsFreeListener:
                 # after "hey block" must not be lost while Whisper works on the name.
                 self.queue.put((audio, self.addressed))
                 self.addressed = False
+            else:
+                speculation.follow(endpointer, segment)
 
     def _spot(self, audio):
         """React to the name while you're still talking: the overlay opens right away."""
@@ -588,7 +683,8 @@ class HandsFreeListener:
         threading.Thread(target=run, daemon=True).start()
 
     def handle(self, audio, addressed=None):
-        text = transcribe(audio)
+        # `audio` is the early transcript started during your pause, or the audio to transcribe now.
+        text = audio.result() if hasattr(audio, 'result') else transcribe(audio)
         if not text:
             return
         now = time.monotonic()

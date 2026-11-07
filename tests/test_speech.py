@@ -48,6 +48,12 @@ class VoxtypeTests(unittest.TestCase):
 class WhisperSessionTests(unittest.TestCase):
     """Tap-to-talk with automatic end-of-speech, on synthetic audio."""
 
+    def setUp(self):
+        # These streams use tones for "voice", which Silero rightly rejects: test the shared logic on loudness.
+        for patcher in (patch.dict(os.environ, {'BLOK_VAD': 'loudness'}), patch('blok.speech.transcribe', return_value='')):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def stream(self, *parts):
         import numpy
         rng = numpy.random.default_rng(0)
@@ -71,7 +77,7 @@ class WhisperSessionTests(unittest.TestCase):
         voice = self.session(self.stream(('noise', 0.5), ('voice', 1.0), ('noise', 2.0), ('voice', 1.0)))
         voice._read()
         self.assertTrue(voice.stopped.is_set() and voice.auto_stopped and voice.heard_speech)
-        seconds = len(voice.frames) * 0.03
+        seconds = len(voice.frames) * 0.032
         self.assertAlmostEqual(seconds, 0.5 + 1.0 + 1.0, delta=0.2)   # the later speech isn't included
 
     def test_gives_up_when_nothing_is_said(self):
@@ -98,14 +104,14 @@ class WhisperSessionTests(unittest.TestCase):
         voice.tail_until = float('inf')         # read everything that's left
         voice._read()
         self.assertFalse(voice.auto_stopped)
-        self.assertAlmostEqual(len(voice.frames) * 0.03, 2.5, delta=0.1)
+        self.assertAlmostEqual(len(voice.frames) * 0.032, 2.5, delta=0.1)
 
     def test_transcribes_what_was_heard_and_reports_levels(self):
         levels = []
         voice = self.session(self.stream(('noise', 0.3), ('voice', 1.0), ('noise', 1.2)), on_level=levels.append)
-        voice._read()
         busy = Mock()
         with patch('blok.speech.transcribe', return_value='open the terminal') as transcribe:
+            voice._read()
             self.assertEqual(voice.wait(lambda: True, busy), 'open the terminal')
         busy.assert_called_once()
         self.assertGreater(len(transcribe.call_args[0][0]), 16000)
