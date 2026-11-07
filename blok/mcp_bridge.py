@@ -33,6 +33,7 @@ TOOLS = {
     'web_search': ('search', False, ''),
     'page_read': ('tool:screen:page', True, 'read the page in front of you'),
     'screen_read': ('tool:screen:ocr', True, 'read the window in front of you'),
+    'page_snapshot': ('snapshot', True, 'see the buttons and links on the page in front of you'),
     'page_click': ('ui_click', True, 'click "{target}"'),
     'type_text': ('tool:type', True, 'type "{text}"'),
     'volume': ('tool:volume', False, ''),
@@ -88,6 +89,16 @@ class Bridge:
             except OSError:
                 pass
 
+    def find_ref(self, ref: str):
+        """(control, page) for a reference ID from page_snapshot, checked against the page as it is now."""
+        from blok import browser
+        self.backend.require_extension('Page snapshots', 'phase12-v1')
+        seen = browser.request({'action': 'snapshot', 'limit': 500})
+        for control in seen['controls']:
+            if control['ref'] == ref:
+                return control, seen['page']
+        raise RuntimeError(f'{ref} is not on the page any more. Take a new page_snapshot.')
+
     def call(self, name: str, args: dict, client: str) -> str:
         from blok import choreo, screen
         from blok.commands import Action
@@ -95,6 +106,13 @@ class Bridge:
         if name not in TOOLS:
             raise RuntimeError(f'Unknown tool {name}')
         kind, needs_approval, card = TOOLS[name]
+        by_ref = None
+        if kind == 'ui_click' and not args.get('ref') and not args.get('target'):
+            raise RuntimeError('page_click needs a ref or a target.')
+        if kind == 'ui_click' and args.get('ref'):
+            # The card shows the control's real name, which the page decides, not the client's word for it.
+            by_ref = self.find_ref(str(args['ref']))
+            args = {**args, 'target': by_ref[0]['name']}
         context = backend.worker_context
         context.generation = backend.generation   # "stop" cancels AI-driven plans like voice ones
         if needs_approval:
@@ -127,6 +145,14 @@ class Bridge:
                 task = {'action': 'search', 'site': site if site in ('google', 'youtube', 'spotify') else 'google',
                         'query': str(args.get('query', ''))}
                 return backend.run_action(Action('web_task', json.dumps(task)))
+            if kind == 'snapshot':
+                from blok import browser, snapshot
+                if not backend.browser_in_front():
+                    raise RuntimeError('No browser page is in front.')
+                backend.require_extension('Page snapshots', 'phase12-v1')
+                return snapshot.compact(browser.request({'action': 'snapshot'}))
+            if by_ref:
+                return backend.click_observed(by_ref[0]['control'], by_ref[1])
             if kind == 'ui_click':
                 return backend.run_action(Action('ui_control', json.dumps({'action': 'click', 'target': str(args.get('target', ''))})))
             if kind.startswith('tool:screen:'):

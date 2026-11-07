@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase11-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase12-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -172,12 +172,37 @@ export async function run(req, progress=()=>{}) {
       const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
       return confirmed('Pointing at '+found.name,'Control under the mouse observed',{...found,tabId:tab.id});
     }
+    if(task.action==='snapshot') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      await loaded();
+      const seen=await flow.observe('Looking at the page',()=>page({op:'snapshot',limit:task.limit}));
+      return confirmed('Saw '+seen.controls.length+' controls','Current tab observed',{...seen,tab_id:tab.id,tabId:tab.id});
+    }
     if(task.action==='click_observed') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       await focus(tab);
-      const result=await flow.act('Clicking it',()=>page({op:'click',control:task.control,page:task.page}));
+      // Watch what the click causes, so BLoK can say what really happened.
+      const created=[],downloads=[],before=tab.url;
+      const onTab=t=>created.push(t),onDownload=d=>downloads.push(d);
+      chrome.tabs.onCreated.addListener(onTab);chrome.downloads.onCreated.addListener(onDownload);
+      let result,current;
+      try {
+        result=await flow.act('Clicking it',()=>page({op:'click',control:task.control,page:task.page}));
+        for(let waited=0;waited<600&&!created.length&&!downloads.length;waited+=50){
+          current=await chrome.tabs.get(tab.id).catch(()=>null);
+          if(!current||(current.pendingUrl||current.url)!==before)break;
+          await new Promise(r=>setTimeout(r,50));
+        }
+        current=await chrome.tabs.get(tab.id).catch(()=>null);
+      } finally {chrome.tabs.onCreated.removeListener(onTab);chrome.downloads.onCreated.removeListener(onDownload);}
       await page({op:'hints',show:false}).catch(()=>{});
-      return {...result,tabId:tab.id};
+      const effects={};
+      const moved=current&&(current.pendingUrl||current.url);
+      if(created[0])effects.new_tab={tabId:created[0].id,url:created[0].pendingUrl||created[0].url||''};
+      if(downloads[0])effects.download=String(downloads[0].filename||downloads[0].finalUrl||downloads[0].url||'a file').split(/[?#]/)[0].split(/[\\/]/).filter(Boolean).pop()||'a file';
+      if(moved&&moved!==before)effects.navigated=moved;
+      const seen=Object.keys(effects).length>0;
+      return {...result,effects,verified:result.verified||seen,evidence:seen?'Browser reported what the click caused':result.evidence,tabId:tab.id};
     }
     if(task.action==='site_search') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');

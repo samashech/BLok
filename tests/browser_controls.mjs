@@ -45,6 +45,35 @@ try{
 	await page.setContent('<button>Save</button><button>Save</button>');
  await assert.rejects(page.evaluate(pageAction,{op:'click',target:'Save'}),/More than one/);
  console.log('PASS: named controls, field verification and ambiguous match rejection');
+ await page.setContent(`<div style="height:3000px"><header><nav aria-label="Top"><a href="/pricing">Pricing</a></nav></header>
+  <main><label>Email<input value="me@example.com"></label><label>Password<input type="password" value="hunter2secret"></label><input type="submit" value="Log in">
+  <a href="/x"><button>Inner same</button></a><a href="/y"><span>Outer</span><button>Inner different</button></a>
+  <button aria-label="Close"><svg></svg></button><button title="Share"></button><button><img alt="Profile"></button><button></button><button style="display:none">Hidden</button>
+  <button disabled>Off</button><button aria-expanded="true">Menu</button></main></div><footer style="position:absolute;top:2900px"><button>Save</button></footer>`);
+ const snap=await page.evaluate(pageAction,{op:'snapshot'});
+ const byName=Object.fromEntries(snap.controls.map(c=>[c.name,c]));
+ assert.equal(JSON.stringify(snap).includes('hunter2secret'),false);
+ assert.equal(JSON.stringify(snap).includes('me@example.com'),false);
+ assert.deepEqual(byName['Password'].state,['password']);
+ assert.deepEqual(byName['Email'].state,['filled']);
+ assert.equal(byName['Log in'].role,'button');
+ assert.equal(byName['Pricing'].section,'Top');
+ assert.equal(byName['Log in'].section,'main');
+ assert.equal(byName['Save'].section,'footer');
+ assert.equal(byName['Save'].in_view,false);
+ assert.equal(snap.controls.at(-1).name,'Save');              // what's on screen comes first
+ assert.ok(byName['Close']&&byName['Share']&&byName['Profile']);  // icon-only buttons still get names
+ assert.equal(byName['Hidden'],undefined);
+ assert.equal(byName['Off'].disabled,true);
+ assert.deepEqual(byName['Menu'].state,['expanded']);
+ assert.equal(snap.controls.filter(c=>c.name==='Inner same').length,1);   // a link wrapping its button is one control
+ assert.ok(byName['Inner different']&&snap.controls.some(c=>c.name.startsWith('Outer')));   // different names stay separate
+ assert.match(byName['Save'].ref,/^e\d+$/);
+ assert.equal((await page.evaluate(pageAction,{op:'snapshot',limit:2})).truncated,true);
+ await page.evaluate(pageAction,{op:'click',control:byName['Menu'].control,page:snap.page});  // a reference ID clicks that control
+ await page.locator('button:text-is("Menu")').evaluate(e=>e.outerHTML='<button aria-expanded="true">Changed</button>');
+ await assert.rejects(page.evaluate(pageAction,{op:'click',control:byName['Menu'].control,page:snap.page}),/changed after observation/);
+ console.log('PASS: page snapshots: compact, on-screen first, no field contents');
  await page.setContent('<button>Save</button>');
  assert.equal((await page.evaluate(pageAction,{op:'click',target:'Save'})).verified,false);
  await page.setContent('<label>Name<input oninput="queueMicrotask(()=>this.value=\'original\')"></label>');

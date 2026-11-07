@@ -95,6 +95,50 @@ export async function pageAction(request, captureErrors=false) {
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
   }
+  if(request.op==='snapshot') {
+    // One compact entry per control, what's on screen first. Field contents are never read.
+    const inView=e=>{const r=e.getBoundingClientRect();return r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth;};
+    const parentOf=e=>e.parentElement||e.getRootNode()?.host||null;
+    const label=e=>{
+      const own=(e.matches('input[type="submit"],input[type="button"],input[type="reset"]')?e.value:'')||name(e);
+      const inner=own.trim()?'':e.title||e.querySelector?.('[aria-label]')?.getAttribute('aria-label')||e.querySelector?.('img[alt]')?.alt||e.querySelector?.('svg title')?.textContent||'';
+      return String(own||inner).replace(/\s+/g,' ').trim().slice(0,80);
+    };
+    const LANDMARKS={nav:'navigation',header:'header',footer:'footer',aside:'sidebar',form:'form',dialog:'dialog',main:'main'};
+    const ROLES={navigation:'navigation',banner:'header',contentinfo:'footer',complementary:'sidebar',form:'form',dialog:'dialog',main:'main',search:'search'};
+    const sectionOf=e=>{
+      for(let n=parentOf(e);n&&n.nodeType===1;n=parentOf(n)){
+        const kind=ROLES[n.getAttribute('role')]||LANDMARKS[n.tagName.toLowerCase()];
+        if(kind||(n.tagName==='SECTION'&&n.hasAttribute('aria-label')))return String(n.getAttribute('aria-label')||kind).replace(/\s+/g,' ').trim().slice(0,30);
+      }
+      return '';
+    };
+    const stateOf=e=>{
+      const state=[];
+      let active=document.activeElement;while(active?.shadowRoot?.activeElement)active=active.shadowRoot.activeElement;
+      if(active===e)state.push('focused');
+      if(e.checked===true||e.getAttribute('aria-checked')==='true')state.push('checked');
+      if(e.getAttribute('aria-expanded')==='true')state.push('expanded');
+      if(e.getAttribute('aria-selected')==='true')state.push('selected');
+      if(e.hasAttribute('aria-current')&&e.getAttribute('aria-current')!=='false')state.push('current');
+      if(e.matches('input[type="password"]'))state.push('password');
+      else if(editable(e)&&String(e.value??e.textContent??'').length)state.push('filled');
+      return state;
+    };
+    const chosen=new Set(nodes);
+    const kept=nodes.filter(e=>{
+      const own=norm(label(e));
+      for(let n=parentOf(e);n&&n.nodeType===1;n=parentOf(n))if(chosen.has(n)&&(!own||norm(label(n))===own))return false;   // the same control, twice
+      return !!own;
+    });
+    const ordered=[...kept.filter(inView),...kept.filter(e=>!inView(e))];
+    const limit=request.limit||150;
+    const controls=ordered.slice(0,limit).map(e=>{
+      const d=descriptor(e);
+      return {ref:d.id.replace('control-','e'),role:d.role,name:label(e),section:sectionOf(e),state:stateOf(e),disabled:d.disabled,in_view:inView(e),control:{id:d.id,fingerprint:d.fingerprint}};
+    });
+    return {url:location.href,title:document.title,page:page(),total:ordered.length,truncated:ordered.length>limit,controls};
+  }
   if(request.op==='find_control') {
     // Replay: the visible control with this recorded label (and role, when it still matches).
     const wanted=norm(request.name);

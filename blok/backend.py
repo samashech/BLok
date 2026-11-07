@@ -847,7 +847,7 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1')
 
     def browser_in_front(self):
         try:
@@ -1018,10 +1018,9 @@ class Backend:
             return f'Opened {label} in a new tab'
         if SENSITIVE_WORDS.search(label):
             self.confirm(f'Click "{label}"?', action='click', value=label)
-        result = browser.request({'action': 'click_observed', 'control': found['control'], 'page': found['page']})
+        message = self.click_observed(found['control'], found['page'], label=f'Clicked {label}')
         self.context.hints_until = 0.0
-        self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
-        return f'Selected {label}. Say "type" and the text.' if found.get('editable') else f'Clicked {label}'
+        return f'Selected {label}. Say "type" and the text.' if found.get('editable') else message
 
     def set_hands_free(self, on, persist=True):
         """Start or stop listening for "hey block" (Phase 1b)."""
@@ -1067,9 +1066,7 @@ class Backend:
         name = (found.get('name') or '').strip() or 'that control'
         if SENSITIVE_WORDS.search(name):
             self.confirm(f'Click "{name[:60]}"?', action='click', value=name)
-        result = browser.request({'action': 'click_observed', 'control': found['control'], 'page': found['page']})
-        self.emit(type="execution", verified=result.get('verified', False), evidence=result.get('evidence', ''), trace=result.get('trace', []))
-        return 'Clicked ' + name[:80]
+        return self.click_observed(found['control'], found['page'], label='Clicked ' + name[:80])
 
     def refresh_page_context(self):
         """Before each command, learn which page is really in front of the user.
@@ -1159,6 +1156,8 @@ class Backend:
         def progress(event):
             if event.get('status') == 'running':
                 self.emit(type="activity", state="executing", message=event['message'])
+        if action=='click' and task.get('target') and not task.get('color') and self.has_snapshots():
+            return self.click_on_page(task,progress)
         try:
             result=browser.request(task,on_progress=progress)
         except browser.BrowserTaskError as error:
@@ -1183,6 +1182,48 @@ class Backend:
         self.emit(type="execution",verified=result.get('verified',False),
                   evidence=result.get('evidence',''),trace=result.get('trace',[]))
         return result['message']
+
+    def has_snapshots(self):
+        try:
+            return self.extension_version()=='phase12-v1'
+        except RuntimeError:
+            return False
+
+    def click_on_page(self, task, progress=None):
+        """Find what you meant in a snapshot of the page, then click exactly that control."""
+        from blok import snapshot
+        from blok.plans import SENSITIVE_WORDS
+        target=task['target']
+        seen=browser.request({'action':'snapshot'},on_progress=progress)
+        control=snapshot.resolve(target,seen['controls'],navigate=bool(task.get('navigate')))
+        if control is None:
+            # The words don't match: Laya may still know "sign up" means "Create account". You confirm it.
+            options=snapshot.closest(target,seen['controls'])
+            choice,_=self.laya.pick(target,options,'Which control on this web page does the user mean?',threshold=0.6) if self.laya and options else (None,0)
+            if not choice:
+                if seen.get('truncated'):       # it may be further down than the snapshot goes
+                    return browser.request(task,on_progress=progress)['message']
+                offer=', '.join(f'"{name}"' for name in options[:3])
+                raise RuntimeError(f'No visible control named {target}.'+(f' Closest: {offer}.' if offer else ''))
+            self.confirm(f'Click "{choice[:60]}"?',action='click',value=choice)
+            control=next(c for c in seen['controls'] if c['name']==choice)
+        elif SENSITIVE_WORDS.search(control['name']) and not SENSITIVE_WORDS.search(target):
+            # What you said sounded harmless, but the control it fits isn't. (A risky word you said was already confirmed.)
+            self.confirm(f'Click "{control["name"][:60]}"?',action='click',value=control['name'])
+        return self.click_observed(control['control'],seen['page'],progress)
+
+    def click_observed(self, control, page, progress=None, label=None):
+        """Click one observed control, and report what the browser saw it do."""
+        from blok import snapshot
+        result=browser.request({'action':'click_observed','control':control,'page':page},on_progress=progress)
+        effects=result.get('effects') or {}
+        if effects.get('new_tab'):
+            self.context.update_tab(effects['new_tab'].get('tabId'),url=effects['new_tab'].get('url'))
+        elif effects.get('navigated'):
+            self.context.update_tab(result.get('tabId'),url=effects['navigated'])
+        self.emit(type="execution",verified=result.get('verified',False),
+                  evidence=result.get('evidence',''),trace=result.get('trace',[]))
+        return snapshot.describe_click({**result,'message':label or result['message']})
 
     def require_browser_context(self):
         """The results to choose from are the ones on the tab in front, whoever searched."""

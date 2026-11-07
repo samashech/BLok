@@ -42,6 +42,7 @@ You don't need to phrase things properly. Fillers, stutters, slang and mid-sente
 | “yo can u look up reddit for me” | opens Reddit (and “look up how to cook pasta” searches Google) |
 | “open youtube” … “get me a pewdiepie video” | plays one, in the same tab |
 | “open steam” … “search for phantom blade” | searches Steam, because that's the page in front of you |
+| “click add to card” · “second comments” · “save in the footer” | finds the control you meant, even if a word was misheard, and says if the click opened a tab or started a download |
 | *(pointing with the mouse)* “click that button” | clicks what you're pointing at; asks first if it says delete, buy or pay |
 | “find my resume pdf” … “open it” | finds it in your home folder, then opens it |
 | “add buy milk to my todo file” | appends the line |
@@ -113,7 +114,7 @@ Say **“hands free on”** (or run `blok handsfree on`) and BLoK listens for it
 | “scroll down” · “scroll up a little” · “go to the top” | scrolls the page, or the app in front |
 | “hide numbers” · “hands free off” | clears the numbers · stops listening |
 
-It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers, page reading and teaching need the browser extension updated to `phase11`: reload it in `brave://extensions`, then reload open pages.
+It costs almost no CPU while waiting (Whisper runs only when someone speaks), never records to disk, and pauses while BLoK talks. Numbers, page reading and teaching need the browser extension updated to `phase12`: reload it in `brave://extensions`, then reload open pages.
 
 ## Teach it by showing
 
@@ -135,7 +136,7 @@ claude mcp add blok -- blok mcp          # Claude Code
 
 For Claude Desktop or any other MCP client, add a server whose command is `blok mcp` (stdio). BLoK must be running.
 
-It offers 23 tools: `blok_command` (any plain-English command, as you'd say it), window and layout control, focus mode, file find/read/append/create, browser open/search/read/click, typing, volume, brightness, media and `say`.
+It offers 24 tools: `blok_command` (any plain-English command, as you'd say it), window and layout control, focus mode, file find/read/append/create, browser open/search/read/click, a compact `page_snapshot` of the page's controls (click them by reference ID), typing, volume, brightness, media and `say`.
 
 **You stay in control:** anything that changes things or hands your data to the AI (reading files, pages or the screen, typing, clicking, writing files, restoring layouts, running a command) shows BLoK's approval card on your screen, naming the app and what it wants to do. Only you can approve, by voice, Enter or a click; the AI app has no way to. Opening sites, searching, arranging windows, volume and brightness run without asking. Tool calls go through a socket only your user can open (`$XDG_RUNTIME_DIR/blok.sock`).
 
