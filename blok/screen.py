@@ -31,11 +31,12 @@ def active_window() -> dict:
     return json.loads(_run(['hyprctl', '-j', 'activewindow'], text=True).stdout or '{}')
 
 
-def ocr_window(window: dict | None = None, hide_overlay=None) -> dict:
+def ocr_window(window: dict | None = None, hide_overlay=None, sparse: bool = False) -> dict:
     """OCR the focused window. Returns {'text', 'words': [{text, x, y, w, h, conf}], 'window'}.
 
     `hide_overlay(hidden)` hides BLoK's own overlay during the capture, so its text
-    (often the very question being asked) isn't read as the window's.
+    (often the very question being asked) isn't read as the window's. `sparse` looks for
+    scattered labels: reading a page as one block of text finds no buttons at all.
     """
     if not (shutil.which('grim') and shutil.which('tesseract') and shutil.which('magick')):
         raise RuntimeError('Reading other apps needs grim, tesseract and imagemagick.')
@@ -60,20 +61,55 @@ def ocr_window(window: dict | None = None, hide_overlay=None) -> dict:
         variants = ([['-threshold', '35%', '-negate'], ['-threshold', '45%', '-negate'], ['-negate']] if mean < 0.5
                     else [['-threshold', '60%'], ['-threshold', '75%'], []])
         best = None
+        if sparse:
+            # Doubling helps small interface text, but makes large text unreadable: read both sizes.
+            prepared = Path(folder) / 'actual.png'
+            _run(['magick', str(shot), '-colorspace', 'Gray', *(['-negate'] if mean < 0.5 else []), str(prepared)])
+            best = _tesseract(prepared, sparse, zoom=1)
         for i, steps in enumerate(variants):
             prepared = Path(folder) / f'prep{i}.png'
             _run(['magick', str(shot), '-colorspace', 'Gray', '-resize', '200%', *steps, str(prepared)])
-            result = _tesseract(prepared)
+            result = _tesseract(prepared, sparse)
+            if sparse:
+                # Each treatment can drop a different word, so looking for a label keeps them all.
+                best = _merge(best, result)
+                continue
             if best is None or result['score'] > best['score']:
                 best = result
             if best['score'] > 85:
                 break
+        # On a scaled display the capture has more pixels than the window has positions.
+        pixels = _run(['magick', 'identify', '-format', '%w', str(shot)], text=True).stdout
+        factor = int(pixels) / w if str(pixels).strip().isdigit() and w else 1.0
+    if factor != 1.0:
+        for word in best['words']:
+            for key in ('x', 'y', 'w', 'h'):
+                word[key] = round(word[key] / factor)
     best['window'] = window
     return best
 
 
-def _tesseract(path: Path) -> dict:
-    tsv = _run(['tesseract', str(path), '-', '--psm', '6', 'tsv'], text=True).stdout
+def _merge(seen: dict | None, more: dict) -> dict:
+    """Add the words only `more` found. The same word in the same spot counts once, at its best confidence."""
+    if seen is None:
+        return more
+    center = lambda w: (w['x'] + w['w'] / 2, w['y'] + w['h'] / 2)
+    for word in more['words']:
+        cx, cy = center(word)
+        same = next((w for w in seen['words'] if w['text'].lower() == word['text'].lower()
+                     and abs(center(w)[0] - cx) <= 10 and abs(center(w)[1] - cy) <= 10), None)
+        if same is None:
+            seen['words'].append(word)
+        elif word['conf'] > same['conf']:
+            same.update(word)
+    seen['words'].sort(key=lambda w: (round(w['y'] / 12), w['x']))      # reading order, so labels stay in sequence
+    seen['text'] = ' '.join(w['text'] for w in seen['words'])
+    seen['score'] = max(seen['score'], more['score'])
+    return seen
+
+
+def _tesseract(path: Path, sparse: bool = False, zoom: int = 2) -> dict:
+    tsv = _run(['tesseract', str(path), '-', '--psm', '11' if sparse else '6', 'tsv'], text=True).stdout
     words, lines = [], {}
     for row in tsv.splitlines()[1:]:
         cols = row.split('\t')
@@ -82,8 +118,8 @@ def _tesseract(path: Path) -> dict:
         conf = float(cols[10])
         if conf < 0:
             continue
-        word = {'text': unicodedata.normalize('NFKC', cols[11]), 'x': int(cols[6]) // 2, 'y': int(cols[7]) // 2, 'w': int(cols[8]) // 2,
-                'h': int(cols[9]) // 2, 'conf': conf}
+        word = {'text': unicodedata.normalize('NFKC', cols[11]), 'x': int(cols[6]) // zoom, 'y': int(cols[7]) // zoom, 'w': int(cols[8]) // zoom,
+                'h': int(cols[9]) // zoom, 'conf': conf}
         words.append(word)
         lines.setdefault((cols[2], cols[3], cols[4]), []).append(word['text'])
     good = [w['conf'] for w in words if re.search(r'[A-Za-z]{2}', w['text'])]
@@ -190,23 +226,26 @@ def _llm(instruction: str, text: str) -> str | None:
 
 def find_word(words: list[dict], target: str) -> dict | None:
     """The on-screen box for a label (one or more words), most confident first."""
+    return max(find_words(words, target), key=lambda box: box['conf'], default=None)
+
+
+def find_words(words: list[dict], target: str) -> list[dict]:
+    """Every on-screen box for a label (one or more words)."""
     target = re.sub(r'\s+(?:button|link|tab|icon|option|menu|field)$', '', target.strip(), flags=re.I)
     wanted = [w for w in re.findall(r'\w+', target.lower()) if w not in STOP] or re.findall(r'\w+', target.lower())
     if not wanted:
-        return None
+        return []
     # OCR misreads a letter now and then ("ﬁodule"), so words match when they're nearly equal.
     same = lambda seen, want: seen == want or (len(want) > 3 and SequenceMatcher(None, seen, want).ratio() >= 0.8)
-    best = None
+    found = []
     for i, word in enumerate(words):
         if not same(re.sub(r'\W', '', word['text'].lower()), wanted[0]):
             continue
         run = words[i:i + len(wanted)]
         if len(run) == len(wanted) and all(same(re.sub(r'\W', '', w['text'].lower()), want) for w, want in zip(run, wanted)):
-            box = {'x': run[0]['x'], 'y': min(w['y'] for w in run), 'w': run[-1]['x'] + run[-1]['w'] - run[0]['x'],
-                   'h': max(w['h'] for w in run), 'conf': min(w['conf'] for w in run)}
-            if best is None or box['conf'] > best['conf']:
-                best = box
-    return best
+            found.append({'x': run[0]['x'], 'y': min(w['y'] for w in run), 'w': run[-1]['x'] + run[-1]['w'] - run[0]['x'],
+                          'h': max(w['h'] for w in run), 'conf': min(w['conf'] for w in run)})
+    return found
 
 
 # ---------------------------------------------------------------- what people say

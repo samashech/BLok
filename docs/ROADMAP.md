@@ -141,7 +141,7 @@ mode stays under ~3% in a quiet room.
 | 1a Browser hints | done |
 | 1b Hands-free listening | done (idle CPU ≈ 0% in a quiet room) |
 | 1c Everyday commands | done |
-| 1d Screen grid | planned (needs `ydotool`) |
+| 1d Screen grid | numbered hints in the browser; click by reading the screen with `ydotool` everywhere else |
 | 2 Hinglish | done: 11/12 spoken test commands (multilingual small), English unaffected |
 | 3 Window choreography | done |
 | 4 Screen understanding | done |

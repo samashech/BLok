@@ -862,23 +862,61 @@ class Backend:
             time.sleep(0.15)
 
     def click_by_sight(self, target):
-        """OCR the window, move the pointer onto the label, and click when ydotool is available."""
-        from blok import screen
+        """OCR the window, move the pointer onto the label, and click it with ydotool.
+
+        A click here can't be tied to a control, so it refuses rather than guess: not if the
+        label is in several places, or the window changed since it was read.
+        """
+        from blok import clicker, screen
         from blok.plans import SENSITIVE_WORDS
         label = re.sub(r'\s+(?:button|link|tab|icon|option)$', '', target.strip(), flags=re.I)
-        seen = screen.ocr_window(hide_overlay=self.hide_overlay)
-        box = screen.find_word(seen['words'], label)
-        if not box:
-            raise RuntimeError(f'I can\'t see "{label}" in this window.')
-        x = seen['window']['at'][0] + box['x'] + box['w'] // 2
-        y = seen['window']['at'][1] + box['y'] + box['h'] // 2
+        seen, box = self.locate_on_screen(label)
         if SENSITIVE_WORDS.search(label):
             self.confirm(f'Click "{label}"?', action='click', value=label)
+            # The answer may have taken a while: only click if it's still where it was.
+            seen_again, again = self.locate_on_screen(label)
+            self.check_same_window(seen['window'], seen_again['window'])
+            if abs(again['x'] - box['x']) > 4 or abs(again['y'] - box['y']) > 4:
+                raise RuntimeError(f'"{label}" moved while you decided, so I didn\'t click. Say it again.')
+        window = seen['window']
+        x = window['at'][0] + box['x'] + box['w'] // 2
+        y = window['at'][1] + box['y'] + box['h'] // 2
         browser.run(['hyprctl', 'dispatch', f'hl.dsp.cursor.move({{ x = {x}, y = {y} }})'])
-        if shutil.which('ydotool'):
-            browser.run(['ydotool', 'click', '0xC0'])
-            return f'Clicked {label}'
-        return f'The pointer is on {label}. Clicking in other apps needs ydotool; click it yourself for now.'
+        if not clicker.available():
+            return f'The pointer is on {label}. {clicker.INSTALL_HINT}'
+        self.hide_overlay(True)      # the overlay must not catch the click
+        try:
+            self.check_click_is_safe(window, x, y)
+            clicker.click()
+        finally:
+            self.hide_overlay(False)
+        self.emit(type="execution", verified=False, evidence='Clicked by position after reading the screen; effect not observed', trace=[])
+        return f'Clicked {label}'
+
+    def locate_on_screen(self, label):
+        """(what's on screen, the one box showing this label), or an error saying why not."""
+        from blok import screen
+        seen = screen.ocr_window(hide_overlay=self.hide_overlay, sparse=True)
+        boxes = [box for box in screen.find_words(seen['words'], label) if box['conf'] >= 50]
+        if not boxes:
+            raise RuntimeError(f'I can\'t see "{label}" in this window.')
+        if len(boxes) > 1:
+            raise RuntimeError(f'I can see "{label}" in {len(boxes)} places here, so I didn\'t click. Say more of its label.')
+        return seen, boxes[0]
+
+    @staticmethod
+    def check_same_window(window, now):
+        if any(now.get(key) != window.get(key) for key in ('address', 'at', 'size')):
+            raise RuntimeError('The window changed, so I didn\'t click.')
+
+    @staticmethod
+    def check_click_is_safe(window, x, y):
+        """Last look before clicking: the same window, in the same place, and the pointer on target."""
+        from blok import screen
+        Backend.check_same_window(window, screen.active_window())
+        found = re.fullmatch(r'\s*(-?[\d.]+),\s*(-?[\d.]+)\s*', browser.run(['hyprctl', 'cursorpos']))
+        if not found or abs(float(found[1]) - x) > 2 or abs(float(found[2]) - y) > 2:
+            raise RuntimeError('The pointer didn\'t reach the spot, so I didn\'t click.')
 
     def skill_tool(self, name, task):
         """Phase 6: learn a browser task by watching, then replay it by name."""
@@ -1194,7 +1232,13 @@ class Backend:
         from blok import snapshot
         from blok.plans import SENSITIVE_WORDS
         target=task['target']
-        seen=browser.request({'action':'snapshot'},on_progress=progress)
+        try:
+            seen=browser.request({'action':'snapshot'},on_progress=progress)
+        except browser.BrowserTaskError:
+            # Pages extensions can't touch, like brave://settings or the Web Store.
+            if self.can_click_by_sight():
+                return self.click_by_sight(target)
+            raise
         control=snapshot.resolve(target,seen['controls'],navigate=bool(task.get('navigate')))
         if control is None:
             # The words don't match: Laya may still know "sign up" means "Create account". You confirm it.
@@ -1202,15 +1246,33 @@ class Backend:
             choice,_=self.laya.pick(target,options,'Which control on this web page does the user mean?',threshold=0.6) if self.laya and options else (None,0)
             if not choice:
                 if seen.get('truncated'):       # it may be further down than the snapshot goes
-                    return browser.request(task,on_progress=progress)['message']
+                    try:
+                        return browser.request(task,on_progress=progress)['message']
+                    except browser.BrowserTaskError as error:
+                        if 'No visible control' not in str(error):
+                            raise
                 offer=', '.join(f'"{name}"' for name in options[:3])
-                raise RuntimeError(f'No visible control named {target}.'+(f' Closest: {offer}.' if offer else ''))
+                missing=f'No visible control named {target}.'+(f' Closest: {offer}.' if offer else '')
+                if not self.can_click_by_sight():
+                    raise RuntimeError(missing)
+                # Not in the page's controls (a canvas, an image of a button): look at the screen itself.
+                try:
+                    return self.click_by_sight(target)
+                except RuntimeError as error:
+                    if "can't see" in str(error):
+                        raise RuntimeError(missing) from None
+                    raise
             self.confirm(f'Click "{choice[:60]}"?',action='click',value=choice)
             control=next(c for c in seen['controls'] if c['name']==choice)
         elif SENSITIVE_WORDS.search(control['name']) and not SENSITIVE_WORDS.search(target):
             # What you said sounded harmless, but the control it fits isn't. (A risky word you said was already confirmed.)
             self.confirm(f'Click "{control["name"][:60]}"?',action='click',value=control['name'])
         return self.click_observed(control['control'],seen['page'],progress)
+
+    @staticmethod
+    def can_click_by_sight():
+        from blok import clicker
+        return clicker.available()
 
     def click_observed(self, control, page, progress=None, label=None):
         """Click one observed control, and report what the browser saw it do."""

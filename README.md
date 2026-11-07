@@ -67,7 +67,7 @@ No GPU and no screenshots sent anywhere: in the browser BLoK reads the page's ow
 | “what's the price here?” · “on this page, who wrote it?” | answers from the page |
 | “click the blue Download button” | the color picks between same-named buttons |
 | “go to pricing” · “open settings” · “take me to my orders” · “next page” | clicks that link or button on the page in front (the topmost one if there are several) |
-| “click Save” in an app without accessibility labels | finds the word on screen and puts the pointer on it (clicks too if `ydotool` is installed) |
+| “click Save” in an app or on a page with no usable controls | reads the word off the screen and clicks it, once `ydotool` is installed (`sudo pacman -S ydotool`); it won't click if the word is in several places or the window changed |
 
 With Ollama running, the local Qwen model writes the summaries and explanations; without it BLoK picks the most relevant sentences and recognises prices, dates, emails and phone numbers. Screen text is never stored. In Hinglish: “ye page kis baare mein hai”, “padh ke sunao”, “ye error kya hai”.
 

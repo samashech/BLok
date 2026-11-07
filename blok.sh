@@ -29,6 +29,7 @@ case "${1:-show}" in
   hide|quit|status) quickshell ipc -p "$BLOK_ROOT/ui" call blok "$1" ;;
   theme) quickshell ipc -p "$BLOK_ROOT/ui" call blok appearance "${2:?Choose omarchy, liquid, halloween, diwali, minecraft or next}" ;;
   mic-test) exec "$BLOK_PYTHON" scripts/check_mic.py "${2:-4}" ;;
+  click-test) exec "$BLOK_PYTHON" scripts/check_click.py ;;
   commands) exec "$BLOK_PYTHON" -m blok.plugins ;;
   mcp) exec "$BLOK_PYTHON" -m blok.mcp ;;
   heard) exec "$BLOK_PYTHON" - <<'PY'
@@ -57,5 +58,5 @@ PY
     printf '%s' "$key" | "$BLOK_PYTHON" -c 'import sys; sys.path.insert(0, "'"$BLOK_ROOT"'"); from blok.voice import save_key; save_key(sys.stdin.read())'
     echo 'Saved. Restart BLoK (blok quit; blok) to use the ElevenLabs voice.' ;;
   text) quickshell ipc -p "$BLOK_ROOT/ui" call blok text "${2:?Provide a command}" ;;
-  *) echo 'Usage: blok [show|toggle|hide|quit|foreground|theme <omarchy|liquid|halloween|diwali|minecraft|next>|voice <kokoro|elevenlabs|local|off>|elevenlabs-key|mic-test|heard|commands|mcp|handsfree on|off|setup|text "command"]' >&2; exit 2 ;;
+  *) echo 'Usage: blok [show|toggle|hide|quit|foreground|theme <omarchy|liquid|halloween|diwali|minecraft|next>|voice <kokoro|elevenlabs|local|off>|elevenlabs-key|mic-test|click-test|heard|commands|mcp|handsfree on|off|setup|text "command"]' >&2; exit 2 ;;
 esac

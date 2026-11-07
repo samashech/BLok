@@ -67,7 +67,7 @@ if (( ! MODELS_ONLY )); then
   step "Checking system packages"
   [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] || warn "Hyprland isn't running in this session; BLoK needs it to run."
   declare -A need=([quickshell]=quickshell [pw-record]=pipewire [wtype]=wtype [fd]=fd [wl-copy]=wl-clipboard [uv]=uv [git]=git)
-  declare -A nice=([espeak-ng]=espeak-ng [pdftotext]=poppler [hyprpicker]=hyprpicker)
+  declare -A nice=([espeak-ng]=espeak-ng [pdftotext]=poppler [hyprpicker]=hyprpicker [ydotool]=ydotool)
   missing=(); optional=()
   for cmd in "${!need[@]}"; do command -v "$cmd" >/dev/null || missing+=("${need[$cmd]}"); done
   for cmd in "${!nice[@]}"; do command -v "$cmd" >/dev/null || optional+=("${nice[$cmd]}"); done

@@ -10,11 +10,14 @@ repo. The app itself was not taken apart.
 |---|------|--------|
 | 1 | Compact page snapshots with reference IDs | Built. Needs an extension reload to go live |
 | 2 | Tell BLoK what a click caused (new tab, download, navigation) | Built. Needs the same reload |
-| 3 | Hide passwords from the model, autofill them, log each use | Not started, needs a decision (below) |
-| 4 | Fall back to the screen when page controls fail | Not started (below) |
+| 3 | Hide passwords from the model, autofill them, log each use | Decided against (below) |
+| 4 | Fall back to the screen when page controls fail | Built. Needs `ydotool` installed |
 
-**To turn it on:** open `brave://extensions`, click Reload on BLoK, then reload your open pages.
-Until then BLoK keeps using the old literal-label click, so nothing breaks.
+**To turn it on:**
+1. Open `brave://extensions`, click Reload on BLoK, then reload your open pages. Until then BLoK
+   keeps using the old literal-label click, so nothing breaks.
+2. Run `sudo pacman -S ydotool`. Without it, BLoK moves the pointer onto the words and asks you to
+   click.
 
 ## Why BLoK does it differently
 
@@ -72,18 +75,38 @@ acts on the right one. This covers "click X", numbered hints and "click that". I
 after a click: unlike Aside, it doesn't push events to the agent while a task runs, because the
 extension link is request and reply.
 
-### 3. Hiding passwords: needs a decision
+### 3. Hiding passwords: decided against
 
-BLoK has no password manager. Snapshots never read field contents, and BLoK refuses to type into
-password fields, so neither path handles a password. Aside's feature is storing passwords and
-filling them for you, which means building encrypted storage. Brave's own password manager
-may be enough. Decide whether this is wanted before building it.
+Not being built. BLoK has no password manager and won't get one: Brave's own password manager
+already autofills, and storing passwords would mean adding encrypted storage for little gain.
+Snapshots never read field contents, and BLoK refuses to type into password fields, so neither
+path handles a password.
 
-### 4. Falling back to the screen: not started
+### 4. Falling back to the screen: built
 
-BLoK can already read words off the screen, but clicking there needs `ydotool` (not installed) or
-a reliable way to map screen positions onto the page, including display scaling. For now, a
-control the snapshot can't see can still be reached with "show numbers".
+When a page's controls don't have what you asked for, BLoK reads the window with OCR, moves the
+pointer onto the words and clicks with `ydotool`. This covers canvases, images of buttons, pages
+extensions can't touch (like `brave://settings`), and apps with no accessibility labels.
+
+A click by position can't be tied to a control, so it refuses rather than guesses. It stops if the
+words appear in several places, or if the window or pointer moved. Risky words are confirmed, and
+it reads the screen again afterwards to check the words are still in the same spot. The overlay
+hides so it can't catch the click.
+
+BLoK runs its own `ydotoold` on a private socket, with the keyboard side off. It starts at the
+first such click and ends with BLoK, so no system service is left behind. Positions also account
+for display scaling now.
+
+Three OCR problems were found on the way, all of which stopped it finding buttons:
+- Reading a window as a single block of text finds nothing in a sparse layout of buttons. Looking
+  for something to click now uses Tesseract's sparse text mode.
+- Doubling the image size helps small text but makes large text unreadable, so it now reads both
+  sizes.
+- Keeping only the image treatment with the best average confidence could silently lose a word,
+  which could also hide a duplicate from the "in several places" check. It now keeps the words from
+  every treatment.
+
+Reading a page aloud keeps the old behavior, because that needs reading order.
 
 ## Known limits
 
@@ -92,9 +115,20 @@ control the snapshot can't see can still be reached with "show numbers".
   falls back to the exact-label click.
 - "Click the blue X" still uses the old path, because the snapshot has no colors.
 - "Type X into the Y field" still matches the field's label literally. Snapshots cover clicks only.
+- Screen clicks depend on OCR. Small, dim text can be misread, and then BLoK says it can't see the
+  words. If the same label appears twice and only one copy is read correctly, the "several places"
+  check can't notice the other, so BLoK would click the one it read.
+- A screen click can't tell what it did, so BLoK reports only that it clicked.
 
 ## Not yet verified
 
-The whole chain hasn't run in your real browser, because the extension needs a reload first. So
-far, the snapshot was tested in real Brave on real pages, while the extension's message handling
-and the Python click flow were tested with stand-ins.
+**Snapshots:** the whole chain hasn't run in your real browser, because the extension needs a
+reload first. So far, the snapshot was tested in real Brave on real pages, while the extension's
+message handling and the Python click flow were tested with stand-ins.
+
+**Screen clicks:** no real click has landed yet. Tested so far: the private daemon starts, answers
+and cleans up (with a private copy of `ydotool`), OCR finds buttons on drawn light and dark windows,
+and the safety checks with stand-ins. Testing on the live desktop kept losing focus while the
+computer was in use, so it was stopped. To finish it, install `ydotool` and run
+`./blok.sh click-test` with your hands off the mouse. It opens a small test window, clicks its
+buttons and reports what landed.
