@@ -27,9 +27,11 @@ FloatingWindow {
         model: [{t: "Zebra", x: 20, y: 20}, {t: "Walrus", x: 310, y: 20}, {t: "Twice", x: 20, y: 180}, {t: "Twice", x: 310, y: 180}]
         Rectangle {
             required property var modelData
-            x: modelData.x; y: modelData.y; width: 270; height: 80; color: "#eeeeee"; border.color: "black"
+            id: button
+            property bool done: false
+            x: modelData.x; y: modelData.y; width: 270; height: 80; color: done ? "#88cc88" : "#eeeeee"; border.color: "black"
             Text { anchors.centerIn: parent; text: modelData.t; font.pixelSize: 34; color: "black" }
-            MouseArea { anchors.fill: parent; onClicked: console.log("PRESSED " + modelData.t) }
+            MouseArea { anchors.fill: parent; onClicked: { button.done = true; console.log("PRESSED " + modelData.t) } }
         }
     }
 }
@@ -84,7 +86,7 @@ def main():
             backend = Backend()
             backend.emit, backend.hide_overlay = Mock(), Mock()
 
-            def step(label, expected):
+            def step(label, expected, says):
                 nonlocal failures
                 before = len(pressed())
                 try:
@@ -93,13 +95,13 @@ def main():
                     message = f'refused: {error}'
                 time.sleep(0.4)
                 got = pressed()[before:]
-                good = got == expected
+                good = got == expected and says in message
                 failures += not good
                 print(f'{"PASS" if good else "FAIL"}  {label}: {message} (the window felt: {got or "nothing"})')
 
-            step('Zebra', ['Zebra'])
-            step('Walrus', ['Walrus'])
-            step('Twice', [])       # it's in two places: must refuse
+            step('Zebra', ['Zebra'], 'the window changed')      # the button turns green, and BLoK sees that
+            step('Walrus', ['Walrus'], 'the window changed')
+            step('Twice', [], '2 places')                       # it's in two places: must refuse
         finally:
             window.terminate()
             window.wait()

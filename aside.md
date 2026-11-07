@@ -108,17 +108,40 @@ Three OCR problems were found on the way, all of which stopped it finding button
 
 Reading a page aloud keeps the old behavior, because that needs reading order.
 
+### Screen click limits: fixed
+
+**Small, dim text.** No single image treatment worked: the best read 34 of 80 labels. Button borders
+were confusing Tesseract, so when normal OCR can't find a label, BLoK now finds each text-like shape
+from the image alone, erases straight lines, and reads each shape on its own. On drawn test windows
+that read 104 of 112 labels, in about 0.2 s. Shapes about as long as the label come first, up to 120,
+so a page full of text stays quick.
+
+Reading stops as soon as the label is clearly found. A text-heavy window took about 10 s when
+reading every way, so stopping early matters.
+
+**Hidden duplicates.** OCR can't notice a copy it misread, so BLoK takes the pixels of the word it
+found and searches the window for lookalikes. It refuses if there's another, even if OCR read that
+one as nonsense. A match inside a longer word that OCR read clearly ("Save" in "Saved") doesn't count.
+
+**What the click did.** BLoK compares before and after: new windows, the browser's tab and address,
+focus, and the screen itself. It reports "opened a new window", "opened a new tab", "the page
+changed", "focus moved to another window", "the window changed" or "nothing visibly changed". It
+also looks twice before clicking. If the window changes by itself, like a video, it says only that
+it clicked rather than credit the click.
+
 ## Known limits
 
-- Only the top frame of a page is read, so controls inside embedded frames aren't listed.
+- Only the top frame of a page is read, so controls inside embedded frames aren't listed in a
+  snapshot. The screen fallback can still reach them.
 - Pages with more than 150 controls list the first 150, on-screen ones first. Below that, BLoK
-  falls back to the exact-label click.
+  falls back to the exact-label click, then the screen.
 - "Click the blue X" still uses the old path, because the snapshot has no colors.
 - "Type X into the Y field" still matches the field's label literally. Snapshots cover clicks only.
-- Screen clicks depend on OCR. Small, dim text can be misread, and then BLoK says it can't see the
-  words. If the same label appears twice and only one copy is read correctly, the "several places"
-  check can't notice the other, so BLoK would click the one it read.
-- A screen click can't tell what it did, so BLoK reports only that it clicked.
+- Screen clicks only see what's on screen: a label that's scrolled away can't be found or counted.
+- The lookalike check compares pixels at the same size, so a copy in a different font or size isn't
+  noticed unless OCR reads it.
+- "The window changed" means something changed, not that it's what you wanted. A change outside the
+  window, or a small one, shows as "nothing visibly changed".
 
 ## Not yet verified
 
@@ -127,8 +150,8 @@ reload first. So far, the snapshot was tested in real Brave on real pages, while
 message handling and the Python click flow were tested with stand-ins.
 
 **Screen clicks:** no real click has landed yet. Tested so far: the private daemon starts, answers
-and cleans up (with a private copy of `ydotool`), OCR finds buttons on drawn light and dark windows,
-and the safety checks with stand-ins. Testing on the live desktop kept losing focus while the
-computer was in use, so it was stopped. To finish it, install `ydotool` and run
-`./blok.sh click-test` with your hands off the mouse. It opens a small test window, clicks its
-buttons and reports what landed.
+and cleans up (with a private copy of `ydotool`), OCR and the lookalike check on drawn light and dark
+windows at two sizes, and the safety checks and click reports with stand-ins. Testing on the live
+desktop kept losing focus while the computer was in use, so it was stopped. To finish it, install
+`ydotool` and run `./blok.sh click-test` with your hands off the mouse. It opens a small test window,
+clicks its buttons, and reports what landed and what BLoK saw happen.

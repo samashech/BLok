@@ -31,12 +31,13 @@ def active_window() -> dict:
     return json.loads(_run(['hyprctl', '-j', 'activewindow'], text=True).stdout or '{}')
 
 
-def ocr_window(window: dict | None = None, hide_overlay=None, sparse: bool = False) -> dict:
+def ocr_window(window: dict | None = None, hide_overlay=None, sparse: bool = False, wanted: str | None = None) -> dict:
     """OCR the focused window. Returns {'text', 'words': [{text, x, y, w, h, conf}], 'window'}.
 
     `hide_overlay(hidden)` hides BLoK's own overlay during the capture, so its text
     (often the very question being asked) isn't read as the window's. `sparse` looks for
-    scattered labels: reading a page as one block of text finds no buttons at all.
+    scattered labels: reading a page as one block of text finds no buttons at all. With
+    `wanted`, reading stops as soon as that label is clearly found.
     """
     if not (shutil.which('grim') and shutil.which('tesseract') and shutil.which('magick')):
         raise RuntimeError('Reading other apps needs grim, tesseract and imagemagick.')
@@ -66,7 +67,10 @@ def ocr_window(window: dict | None = None, hide_overlay=None, sparse: bool = Fal
             prepared = Path(folder) / 'actual.png'
             _run(['magick', str(shot), '-colorspace', 'Gray', *(['-negate'] if mean < 0.5 else []), str(prepared)])
             best = _tesseract(prepared, sparse, zoom=1)
+        sure = lambda: wanted and any(box['conf'] >= 70 for box in find_words(best['words'], wanted))
         for i, steps in enumerate(variants):
+            if sparse and sure():
+                break
             prepared = Path(folder) / f'prep{i}.png'
             _run(['magick', str(shot), '-colorspace', 'Gray', '-resize', '200%', *steps, str(prepared)])
             result = _tesseract(prepared, sparse)
@@ -81,12 +85,205 @@ def ocr_window(window: dict | None = None, hide_overlay=None, sparse: bool = Fal
         # On a scaled display the capture has more pixels than the window has positions.
         pixels = _run(['magick', 'identify', '-format', '%w', str(shot)], text=True).stdout
         factor = int(pixels) / w if str(pixels).strip().isdigit() and w else 1.0
+        image = _gray(shot) if sparse else None
+    if image is not None:
+        best['image'], best['factor'], best['dark'] = image, factor, mean < 0.5
     if factor != 1.0:
         for word in best['words']:
             for key in ('x', 'y', 'w', 'h'):
                 word[key] = round(word[key] / factor)
     best['window'] = window
     return best
+
+
+def _gray(path) -> "numpy.ndarray | None":
+    """An image as a grid of 0–255 brightness values."""
+    import numpy
+    size = _run(['magick', 'identify', '-format', '%w %h', str(path)], text=True).stdout
+    raw = _run(['magick', str(path), '-colorspace', 'Gray', '-depth', '8', 'gray:-']).stdout
+    try:
+        width, height = map(int, str(size).split())
+        return numpy.frombuffer(raw, numpy.uint8).reshape(height, width)
+    except (TypeError, ValueError):
+        return None
+
+
+def capture_gray(window: dict):
+    """A fresh look at a window, for comparing before and after. None if it can't be taken."""
+    (x, y), (w, h) = window['at'], window['size']
+    with tempfile.TemporaryDirectory(prefix='blok-screen-', dir=os.environ.get('XDG_RUNTIME_DIR')) as folder:
+        shot = Path(folder) / 'window.png'
+        if _run(['grim', '-g', f'{x},{y} {w}x{h}', str(shot)]).returncode:
+            return None
+        return _gray(shot)
+
+
+def changed_share(before, after) -> float:
+    """How much of a window visibly differs between two looks, 0–1. Tiny shifts don't count."""
+    import numpy
+    if before is None or after is None or before.shape != after.shape:
+        return 0.0
+    return float((numpy.abs(before.astype(numpy.int16) - after.astype(numpy.int16)) > 24).mean())
+
+
+def clients() -> set[str]:
+    """The addresses of all open windows."""
+    return {c.get('address') for c in json.loads(_run(['hyprctl', '-j', 'clients'], text=True).stdout or '[]')}
+
+
+def _long_runs(mask, length: int):
+    """Which cells belong to a horizontal run at least this long."""
+    import numpy
+    found = numpy.zeros_like(mask)
+    for i, row in enumerate(mask):
+        edges = numpy.diff(numpy.concatenate(([0], row.astype(numpy.int8), [0])))
+        for start, end in zip(numpy.where(edges == 1)[0], numpy.where(edges == -1)[0]):
+            if end - start >= length:
+                found[i, start:end] = True
+    return found
+
+
+def text_blobs(image) -> list[tuple[int, int, int, int]]:
+    """Where text-like shapes are, as (left, top, right, bottom). Works from the image alone.
+
+    Button borders are what confuse Tesseract, so straight lines are erased, then pixels that
+    stand out from their neighbourhood are joined into words.
+    """
+    import numpy
+    a = image.astype(numpy.int32)
+    up, down, left, right = numpy.roll(a, 2, 0), numpy.roll(a, -2, 0), numpy.roll(a, 2, 1), numpy.roll(a, -2, 1)
+    across, along = (up + down) // 2, (left + right) // 2
+    flat = a.copy()
+    lines = _long_runs(numpy.abs(a - across) > 12, 40)
+    flat[lines] = across[lines]
+    lines = _long_runs((numpy.abs(a - along) > 12).T, 40).T
+    flat[lines] = along[lines]
+    size = 15
+    table = numpy.pad(numpy.pad(flat, size, mode='edge').astype(numpy.int64).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    span = 2 * size + 1
+    local = (table[span:, span:] - table[:-span, span:] - table[span:, :-span] + table[:-span, :-span]) / span ** 2
+    ink = numpy.abs(flat - local) > 18
+    joined = ink.copy()
+    for i in numpy.where(ink.any(axis=1))[0]:
+        cells = numpy.where(ink[i])[0]
+        for start, end in zip(cells[:-1], cells[1:]):
+            if 1 < end - start <= 8:
+                joined[i, start:end] = True
+    return _components(joined)
+
+
+def _components(mask) -> list[tuple[int, int, int, int]]:
+    """Bounding boxes of joined regions, keeping only those shaped like words."""
+    import numpy
+    labels = numpy.zeros(mask.shape, numpy.int32)
+    parent = [0]
+
+    def root(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    for y, x in zip(*numpy.nonzero(mask)):
+        near = [v for v in (labels[y, x - 1] if x else 0, labels[y - 1, x] if y else 0) if v]
+        if near:
+            labels[y, x] = root(near[0])
+            if len(near) > 1:
+                parent[root(near[1])] = root(near[0])
+        else:
+            parent.append(len(parent))
+            labels[y, x] = len(parent) - 1
+    boxes: dict[int, list[int]] = {}
+    for y, x in zip(*numpy.nonzero(labels)):
+        box = boxes.setdefault(root(labels[y, x]), [x, y, x + 1, y + 1])
+        box[0], box[1], box[2], box[3] = min(box[0], x), min(box[1], y), max(box[2], x + 1), max(box[3], y + 1)
+    return [tuple(int(v) for v in b) for b in boxes.values() if 6 <= b[3] - b[1] <= 70 and 8 <= b[2] - b[0] <= 500]
+
+
+def read_blobs(seen: dict, label: str, limit: int = 120) -> list[dict]:
+    """Read text-like shapes one at a time. Slower, but it reads small dim text whole-window OCR misses.
+
+    A shape about as long as the label comes first, so a page full of text stays quick.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import numpy
+    image = seen.get('image')
+    if image is None:
+        return []
+    gray = (255 - image) if seen.get('dark') else image
+    letters = max(1, len(label.strip()))
+
+    def likeness(box):
+        fit = (box[2] - box[0]) / max(1, box[3] - box[1]) / letters
+        return abs(fit - 0.55)
+    blobs = sorted(text_blobs(gray), key=likeness)[:limit]
+    factor = seen.get('factor') or 1.0
+
+    def read(box):
+        left, top, right, bottom = box
+        x0, y0 = max(left - 10, 0), max(top - 4, 0)
+        crop = gray[y0:bottom + 4, x0:right + 10]
+        zoom = max(100, min(600, 100 * 48 // max(bottom - top, 1)))
+        with tempfile.TemporaryDirectory(prefix='blok-blob-', dir=os.environ.get('XDG_RUNTIME_DIR')) as folder:
+            path = Path(folder) / 'blob.png'
+            height, width = crop.shape
+            _run(['magick', '-size', f'{width}x{height}', '-depth', '8', 'gray:-', '-filter', 'Lanczos', '-resize', f'{zoom}%',
+                  '-bordercolor', f'gray({int(numpy.median(crop))})', '-border', '16', str(path)], input=crop.astype(numpy.uint8).tobytes())
+            tsv = _run(['tesseract', str(path), '-', '--psm', '7', 'tsv'], text=True).stdout
+        words = []
+        for row in tsv.splitlines()[1:]:
+            cols = row.split('\t')
+            if len(cols) < 12 or not cols[11].strip() or float(cols[10]) < 0:
+                continue
+            scale = 100 / zoom
+            words.append({'text': unicodedata.normalize('NFKC', cols[11]), 'conf': float(cols[10]),
+                          'x': round((x0 + (int(cols[6]) - 16) * scale) / factor), 'y': round((y0 + (int(cols[7]) - 16) * scale) / factor),
+                          'w': round(int(cols[8]) * scale / factor), 'h': round(int(cols[9]) * scale / factor)})
+        return words
+    with ThreadPoolExecutor(8) as pool:
+        return [word for words in pool.map(read, blobs) for word in words]
+
+
+def lookalikes(seen: dict, box: dict) -> int:
+    """How many other places look like this word, comparing pixels, so a copy OCR misread still counts.
+
+    A close match inside a different word the OCR read clearly ("Save" in "Saved") doesn't count.
+    """
+    import numpy
+    image, factor = seen.get('image'), seen.get('factor') or 1.0
+    if image is None:
+        return 0
+    x, y = round(box['x'] * factor), round(box['y'] * factor)
+    w, h = max(1, round(box['w'] * factor)), max(1, round(box['h'] * factor))
+    template = image[max(y, 0):y + h, max(x, 0):x + w].astype(numpy.float64)
+    if template.size == 0 or template.std() < 8 or template.shape[0] > image.shape[0] or template.shape[1] > image.shape[1]:
+        return 0
+    h, w = template.shape
+    a = image.astype(numpy.float64)
+    t = template - template.mean()
+    shape = (a.shape[0] + h, a.shape[1] + w)
+    top = numpy.fft.irfft2(numpy.fft.rfft2(a, shape) * numpy.fft.rfft2(t[::-1, ::-1], shape), shape)[h - 1:a.shape[0], w - 1:a.shape[1]]
+
+    def windowed(values):
+        table = numpy.pad(values.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+        return table[h:, w:] - table[:-h, w:] - table[h:, :-w] + table[:-h, :-w]
+    spread = windowed(a * a) - windowed(a) ** 2 / (h * w)
+    score = numpy.zeros_like(top)
+    usable = spread > (8 ** 2) * h * w
+    score[usable] = numpy.abs(top[usable]) / numpy.sqrt(spread[usable] * (t * t).sum())
+    others = 0
+    ys, xs = numpy.where(score >= 0.88)
+    taken = [(x, y)]
+    for py, px in sorted(zip(ys.tolist(), xs.tolist()), key=lambda p: -score[p[0], p[1]]):
+        if any(abs(px - ox) < w and abs(py - oy) < h for ox, oy in taken):
+            continue
+        taken.append((px, py))
+        cx, cy = (px + w / 2) / factor, (py + h / 2) / factor
+        inside = next((word for word in seen['words'] if word['conf'] >= 60 and word['x'] <= cx <= word['x'] + word['w']
+                       and word['y'] <= cy <= word['y'] + word['h']), None)
+        wide = inside is not None and inside['w'] > (box['w']) * 1.15
+        if not wide:
+            others += 1
+    return others
 
 
 def _merge(seen: dict | None, more: dict) -> dict:
@@ -245,7 +442,13 @@ def find_words(words: list[dict], target: str) -> list[dict]:
         if len(run) == len(wanted) and all(same(re.sub(r'\W', '', w['text'].lower()), want) for w, want in zip(run, wanted)):
             found.append({'x': run[0]['x'], 'y': min(w['y'] for w in run), 'w': run[-1]['x'] + run[-1]['w'] - run[0]['x'],
                           'h': max(w['h'] for w in run), 'conf': min(w['conf'] for w in run)})
-    return found
+    # Reading the screen several ways finds one word several times: overlapping boxes are one place.
+    places = []
+    for box in sorted(found, key=lambda b: -b['conf']):
+        if not any(box['x'] < p['x'] + p['w'] and p['x'] < box['x'] + box['w'] and box['y'] < p['y'] + p['h'] and p['y'] < box['y'] + box['h']
+                   for p in places):
+            places.append(box)
+    return places
 
 
 # ---------------------------------------------------------------- what people say

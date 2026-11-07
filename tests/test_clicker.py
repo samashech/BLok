@@ -3,8 +3,11 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
+
+import numpy
 
 from blok import browser, clicker, screen
 from blok.backend import Backend
@@ -66,7 +69,11 @@ class ClickBySightTests(unittest.TestCase):
                    patch.object(screen, 'active_window', side_effect=lambda: self.active),
                    patch.object(browser, 'run', side_effect=self.run_command),
                    patch.object(clicker, 'available', return_value=True),
-                   patch.object(clicker, 'click', side_effect=lambda: self.clicked.append(self.backend.hide_overlay.call_args.args[0]))]
+                   patch.object(clicker, 'click', side_effect=lambda: self.clicked.append(self.backend.hide_overlay.call_args.args[0])),
+                   patch.object(screen, 'clients', side_effect=lambda: {'0xabc'}),
+                   patch.object(screen, 'capture_gray', return_value=None),
+                   patch.object(screen, 'lookalikes', return_value=0),
+                   patch.object(screen, 'read_blobs', return_value=[])]
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
@@ -81,7 +88,7 @@ class ClickBySightTests(unittest.TestCase):
         return 'ok'
 
     def test_clicks_the_center_of_the_label_with_the_overlay_hidden(self):
-        self.assertEqual(self.backend.click_by_sight('Save button'), 'Clicked Save')
+        self.assertEqual(self.backend.click_by_sight('Save button'), 'Clicked Save · nothing visibly changed')
         self.assertEqual((self.x, self.y), (100 + 10 + 20, 200 + 50 + 5))
         self.assertEqual(self.clicked, [True])
         self.assertEqual(self.backend.hide_overlay.call_args.args[0], False)     # and it comes back
@@ -112,7 +119,7 @@ class ClickBySightTests(unittest.TestCase):
 
     def test_a_changed_title_alone_is_not_a_different_window(self):
         self.active = {**WINDOW, 'title': 'App - edited'}
-        self.assertEqual(self.backend.click_by_sight('Save'), 'Clicked Save')
+        self.assertEqual(self.backend.click_by_sight('Save'), 'Clicked Save · nothing visibly changed')
 
     def test_refuses_if_the_pointer_did_not_arrive(self):
         self.pointer = '5, 5'
@@ -140,6 +147,71 @@ class ClickBySightTests(unittest.TestCase):
             message = self.backend.click_by_sight('Save')
         self.assertIn('The pointer is on Save', message)
         self.assertIn('sudo pacman -S ydotool', message)
+
+
+class ClickEffectTests(ClickBySightTests):
+    """What a click did, as the desktop saw it. Runs on top of the same stand-ins."""
+    def said(self):
+        with patch.object(time, 'sleep'):
+            return self.backend.click_by_sight('Save')
+
+    def looks(self, *images):
+        queue = list(images)
+        return patch.object(screen, 'capture_gray', side_effect=lambda window: queue.pop(0))
+
+    def test_new_window(self):
+        windows = iter([{'0xabc'}, {'0xabc', '0xnew'}])
+        with patch.object(screen, 'clients', side_effect=lambda: next(windows)):
+            self.assertEqual(self.said(), 'Clicked Save · opened a new window')
+
+    def test_focus_moved(self):
+        states = iter([WINDOW, WINDOW, {**WINDOW, 'address': '0xdef'}])
+        with patch.object(screen, 'active_window', side_effect=lambda: next(states)):
+            self.assertEqual(self.said(), 'Clicked Save · focus moved to another window')
+
+    def test_window_changed_and_nothing_changed(self):
+        still = numpy.zeros((100, 100), numpy.uint8)
+        moved = still.copy()
+        moved[10:40, 10:40] = 200
+        with self.looks(still, still, moved):
+            self.assertEqual(self.said(), 'Clicked Save · the window changed')
+        with self.looks(still, still, still):
+            self.assertEqual(self.said(), 'Clicked Save · nothing visibly changed')
+
+    def test_an_animated_window_claims_nothing(self):
+        still = numpy.zeros((100, 100), numpy.uint8)
+        moving = still.copy()
+        moving[:50] = 200
+        with self.looks(still, moving, still):
+            self.assertEqual(self.said(), 'Clicked Save')
+
+    def test_browser_page_and_tab_changes_are_followed(self):
+        self.backend.context.update_tab(7, url='https://example.com/')
+        window = {**WINDOW, 'class': 'brave-browser'}
+        self.active = window
+        tabs = iter([{'tabId': 7, 'url': 'https://example.com/'}, {'tabId': 7, 'url': 'https://github.com/'}])
+        with patch.object(screen, 'ocr_window', side_effect=lambda **_: {'words': self.words, 'window': window}), \
+             patch.object(browser, 'request', side_effect=lambda *a, **k: next(tabs)):
+            self.assertEqual(self.said(), 'Clicked Save · the page changed')
+        self.assertEqual(self.backend.context.active_site, 'github')
+        tabs = iter([{'tabId': 7, 'url': 'https://github.com/'}, {'tabId': 8, 'url': 'brave://newtab/'}])
+        with patch.object(screen, 'ocr_window', side_effect=lambda **_: {'words': self.words, 'window': window}), \
+             patch.object(browser, 'request', side_effect=lambda *a, **k: next(tabs)):
+            self.assertEqual(self.said(), 'Clicked Save · opened a new tab')
+        self.assertEqual(self.backend.context.active_tab_id, 8)
+
+    def test_a_failed_look_never_undoes_the_click_report(self):
+        with patch.object(screen, 'clients', side_effect=['0xabc', OSError('gone')]) as _:
+            pass
+        calls = iter([{'0xabc'}])
+
+        def clients():
+            try:
+                return next(calls)
+            except StopIteration:
+                raise OSError('gone')
+        with patch.object(screen, 'clients', side_effect=clients):
+            self.assertEqual(self.said(), 'Clicked Save')
 
 
 class BrowserFallbackTests(unittest.TestCase):
@@ -199,16 +271,20 @@ class BrowserFallbackTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('tesseract') and shutil.which('magick'), 'needs tesseract and imagemagick')
 class RealOcrTests(unittest.TestCase):
-    """Real OCR on a drawn window. Reading it as one block of text finds no buttons at all."""
-    BUTTONS = (('Zebra', 40, 40), ('Walrus', 320, 40), ('Twice', 40, 200), ('Twice', 320, 200))
+    """Real OCR and real pixels on a drawn window."""
+    BUTTONS = (('Zebra', 40, 40), ('Walrus', 320, 40), ('Twice', 40, 200), ('Twice', 320, 200), ('Saved', 40, 360), ('Cancel', 320, 360))
+    SCENES = (('white', 'black', '#eeeeee', 34), ('#1e1e2e', '#dddddd', '#303040', 34),
+              ('white', 'black', '#eeeeee', 14), ('#1e1e2e', '#dddddd', '#303040', 14),
+              ('#1e1e2e', '#9a9aa8', '#303040', 14), ('white', '#777777', '#f4f4f4', 13))
 
-    def read(self, background, ink, box, size=34):
+    def read(self, background, ink, box, size=34, buttons=None, factor=1):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'XDG_RUNTIME_DIR': folder}):
             drawn = os.path.join(folder, 'drawn.png')
-            command = ['magick', '-size', '604x600', f'xc:{background}', '-pointsize', str(size)]
-            for text, x, y in self.BUTTONS:
-                command += ['-fill', box, '-stroke', ink, '-draw', f'rectangle {x},{y} {x + 240},{y + 80}',
-                            '-stroke', 'none', '-fill', ink, '-annotate', f'+{x + 50}+{y + 52}', text]
+            command = ['magick', '-size', f'{604 * factor}x{500 * factor}', f'xc:{background}', '-font', 'DejaVu-Sans', '-pointsize', str(size * factor)]
+            for text, x, y in buttons or self.BUTTONS:
+                x, y = x * factor, y * factor
+                command += ['-fill', box, '-stroke', ink, '-draw', f'rectangle {x},{y} {x + 240 * factor},{y + 80 * factor}',
+                            '-stroke', 'none', '-fill', ink, '-annotate', f'+{x + 50 * factor}+{y + 50 * factor}', text]
             subprocess.run(command + [drawn], check=True)
             real = subprocess.run
 
@@ -218,23 +294,76 @@ class RealOcrTests(unittest.TestCase):
                     return Mock(returncode=0)
                 return real(args, *rest, **kw)
             with patch.object(screen.subprocess, 'run', side_effect=run):
-                return screen.ocr_window({'at': [0, 0], 'size': [604, 600]}, sparse=True)
+                return screen.ocr_window({'at': [0, 0], 'size': [604, 500]}, sparse=True)
 
-    def test_finds_scattered_buttons_on_light_and_dark_windows_large_and_small(self):
-        for colors in (('white', 'black', '#eeeeee'), ('#1e1e2e', '#dddddd', '#303040'),
-                       ('white', 'black', '#eeeeee', 14), ('#1e1e2e', '#dddddd', '#303040', 14)):
-            words = self.read(*colors)['words']
-            for label, left in (('Zebra', 40), ('Walrus', 320)):
-                boxes = screen.find_words(words, label)
-                self.assertEqual(len(boxes), 1, (label, colors))
-                self.assertTrue(left < boxes[0]['x'] + boxes[0]['w'] // 2 < left + 240, (label, boxes))
-                self.assertTrue(40 < boxes[0]['y'] + boxes[0]['h'] // 2 < 120, (label, boxes))
-            sure = [box for box in screen.find_words(words, 'Twice') if box['conf'] >= 50]
-            # Small dim text can be too blurry to read ("Tuvice"): then it's not found, never guessed.
-            self.assertIn(len(sure), (2,) if colors[3:] == () or colors[0] == 'white' else (0, 2), colors)
+    def found(self, seen, label):
+        boxes = [box for box in screen.find_words(seen['words'], label) if box['conf'] >= 50]
+        if not boxes:
+            boxes = [box for box in screen.find_words(seen['words'] + screen.read_blobs(seen, label), label) if box['conf'] >= 50]
+        return boxes
+
+    def test_finds_labels_in_every_scene_in_the_right_place(self):
+        for scene in self.SCENES:
+            seen = self.read(*scene)
+            for label, left, top in (('Zebra', 40, 40), ('Walrus', 320, 40), ('Cancel', 320, 360)):
+                boxes = self.found(seen, label)
+                self.assertEqual(len(boxes), 1, (label, scene))
+                self.assertTrue(left < boxes[0]['x'] + boxes[0]['w'] // 2 < left + 240, (label, scene, boxes))
+                self.assertTrue(top < boxes[0]['y'] + boxes[0]['h'] // 2 < top + 80, (label, scene, boxes))
+
+    def test_a_copy_the_ocr_missed_is_still_noticed(self):
+        for scene in self.SCENES:
+            seen = self.read(*scene)
+            boxes = self.found(seen, 'Twice')
+            self.assertTrue(boxes, scene)
+            seen['words'] = [w for w in seen['words'] if not (w['text'].lower() == 'twice' and w['x'] > 300)]   # OCR "missed" one
+            self.assertEqual(screen.lookalikes(seen, boxes[0]), 1, scene)
+
+    def test_a_single_label_has_no_lookalikes(self):
+        for scene in self.SCENES:
+            seen = self.read(*scene)
+            for label in ('Zebra', 'Walrus', 'Cancel'):
+                self.assertEqual(screen.lookalikes(seen, self.found(seen, label)[0]), 0, (label, scene))
+
+    def test_part_of_a_longer_word_is_not_a_copy(self):
+        seen = self.read('white', 'black', '#eeeeee', 34, buttons=(('Save', 40, 40), ('Saved', 320, 40)))
+        self.assertEqual(screen.lookalikes(seen, self.found(seen, 'Save')[0]), 0)
+
+    def test_blobs_and_lookalikes_map_back_on_a_scaled_display(self):
+        seen = self.read('#1e1e2e', '#dddddd', '#303040', 14, factor=2)
+        self.assertEqual(seen['factor'], 2)
+        box = self.found(seen, 'Walrus')[0]
+        self.assertTrue(320 < box['x'] + box['w'] // 2 < 560, box)
+        twice = self.found(seen, 'Twice')[0]
+        seen['words'] = [w for w in seen['words'] if not (w['text'].lower() == 'twice' and w['x'] > 300)]
+        self.assertEqual(screen.lookalikes(seen, twice), 1)
+
+    def test_stops_reading_once_the_label_is_clearly_found(self):
+        counted = []
+        real = screen._tesseract
+        with patch.object(screen, '_tesseract', side_effect=lambda *a, **k: counted.append(1) or real(*a, **k)):
+            self.read('white', 'black', '#eeeeee', 34)
+            everything = len(counted)
+            counted.clear()
+            real_ocr = screen.ocr_window
+            with patch.object(screen, 'ocr_window', side_effect=lambda window, sparse: real_ocr(window, sparse=sparse, wanted='Zebra')):
+                self.read('white', 'black', '#eeeeee', 34)
+        self.assertEqual(everything, 4)
+        self.assertEqual(len(counted), 1)
+
+    def test_blobs_read_small_dim_text_by_themselves(self):
+        seen = self.read('#1e1e2e', '#9a9aa8', '#303040', 14)
+        words = {w['text'].lower() for w in screen.read_blobs(seen, 'Twice') if w['conf'] >= 50}
+        self.assertLessEqual({'zebra', 'twice', 'cancel'}, words)
 
 
 class MergeTests(unittest.TestCase):
+    def test_overlapping_readings_are_one_place(self):
+        words = [word('Cancel', 100, conf=70.0), word('Cancel', 112, conf=90.0), word('Cance1', 104, conf=60.0), word('Cancel', 400)]
+        boxes = screen.find_words(words, 'Cancel')
+        self.assertEqual(len(boxes), 2)
+        self.assertEqual(boxes[0]['conf'], 90.0)
+
     def test_keeps_words_from_every_treatment_once(self):
         first = {'text': '', 'score': 80.0, 'words': [word('Zebra', 10), word('Save', 100, conf=60.0)]}
         second = {'text': '', 'score': 70.0, 'words': [word('Walrus', 200), word('Save', 102, conf=95.0)]}

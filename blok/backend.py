@@ -887,21 +887,74 @@ class Backend:
         self.hide_overlay(True)      # the overlay must not catch the click
         try:
             self.check_click_is_safe(window, x, y)
+            before = self.look_before_click(window)
             clicker.click()
+            effect = self.what_the_click_did(window, before)
         finally:
             self.hide_overlay(False)
-        self.emit(type="execution", verified=False, evidence='Clicked by position after reading the screen; effect not observed', trace=[])
-        return f'Clicked {label}'
+        self.emit(type="execution", verified=bool(effect) and effect != self.NOTHING_CHANGED,
+                  evidence=effect or 'Clicked by position; the window is animating, so the effect can\'t be told', trace=[])
+        return f'Clicked {label}' + (f' · {effect}' if effect else '')
+
+    NOTHING_CHANGED = 'nothing visibly changed'
+
+    def look_before_click(self, window):
+        """Windows, page and two looks at the screen. Two, because an animated window changes by itself."""
+        from blok import screen
+        first = screen.capture_gray(window)
+        time.sleep(0.12)
+        return {'clients': screen.clients(), 'first': first, 'last': screen.capture_gray(window), 'tab': self.front_tab(window)}
+
+    @staticmethod
+    def front_tab(window):
+        if not browser.BROWSERS.fullmatch(window.get('class') or ''):
+            return None
+        try:
+            return browser.request({'action': 'active'}, timeout=1)
+        except RuntimeError:
+            return None
+
+    def what_the_click_did(self, window, before):
+        """Say what really happened, from the desktop's point of view. '' if it can't be told."""
+        from blok import screen
+        try:
+            for _ in range(8):      # up to 0.8 s for a new window or page
+                time.sleep(0.1)
+                opened = screen.clients() - before['clients']
+                if opened:
+                    return 'opened a new window'
+                tab = self.front_tab(window)
+                if tab and before['tab'] and tab.get('tabId') != before['tab'].get('tabId'):
+                    self.context.update_tab(tab.get('tabId'), url=tab.get('url'))
+                    return 'opened a new tab'
+                if tab and before['tab'] and tab.get('url') != before['tab'].get('url'):
+                    self.context.update_tab(tab.get('tabId'), url=tab.get('url'))
+                    return 'the page changed'
+                if screen.active_window().get('address') != window.get('address'):
+                    return 'focus moved to another window'
+            noise = screen.changed_share(before['first'], before['last'])
+            if noise > 0.01:
+                return ''           # a video or animation: the screen moves with or without the click
+            changed = screen.changed_share(before['last'], screen.capture_gray(window))
+            return 'the window changed' if changed > max(0.0005, noise * 3) else self.NOTHING_CHANGED
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+            return ''
 
     def locate_on_screen(self, label):
         """(what's on screen, the one box showing this label), or an error saying why not."""
         from blok import screen
-        seen = screen.ocr_window(hide_overlay=self.hide_overlay, sparse=True)
+        seen = screen.ocr_window(hide_overlay=self.hide_overlay, sparse=True, wanted=label)
         boxes = [box for box in screen.find_words(seen['words'], label) if box['conf'] >= 50]
         if not boxes:
+            # Small or dim text: read each text-like shape on its own, and see if the label is there.
+            seen['words'] = seen['words'] + screen.read_blobs(seen, label)
+            boxes = [box for box in screen.find_words(seen['words'], label) if box['conf'] >= 50]
+        if not boxes:
             raise RuntimeError(f'I can\'t see "{label}" in this window.')
-        if len(boxes) > 1:
-            raise RuntimeError(f'I can see "{label}" in {len(boxes)} places here, so I didn\'t click. Say more of its label.')
+        # OCR can misread a second copy, so also compare pixels: a click here has to be sure there's only one.
+        places = len(boxes) if len(boxes) > 1 else 1 + screen.lookalikes(seen, boxes[0])
+        if places > 1:
+            raise RuntimeError(f'I can see "{label}" in {places} places here, so I didn\'t click. Say more of its label.')
         return seen, boxes[0]
 
     @staticmethod
