@@ -45,6 +45,35 @@ class VoxtypeTests(unittest.TestCase):
         voice.run.assert_not_called()
 
 
+class VoiceMeterTests(unittest.TestCase):
+    def settle(self, meter, level, frames=100):
+        for _ in range(frames):
+            value = meter(level)
+        return value
+
+    def test_a_noisy_room_reads_as_silence(self):
+        from blok.speech import LevelMeter
+        self.assertEqual(self.settle(LevelMeter(), 0.015), 0.0)
+
+    def test_voice_is_measured_above_the_room(self):
+        from blok.speech import LevelMeter
+        noisy, quiet = LevelMeter(), LevelMeter()
+        self.settle(noisy, 0.015)
+        self.settle(quiet, 0.0005)
+        self.assertGreater(quiet(0.1), noisy(0.1))           # same voice stands out more in a quiet room
+        self.assertGreater(noisy(0.1), 0.25)                 # and still reads as good speech in a noisy one
+
+    def test_silence_does_not_crash_and_talking_is_not_learned_as_noise(self):
+        from blok.speech import LevelMeter
+        meter = LevelMeter()
+        self.settle(meter, 0.0)
+        self.settle(meter, 0.015)
+        self.assertGreater(self.settle(LevelMeter(), 0.015, 1), -1)
+        meter = LevelMeter()
+        self.settle(meter, 0.015)
+        self.assertGreater(self.settle(meter, 0.1, 150), 0.1)   # ~5 s of talking still shows
+
+
 class WhisperSessionTests(unittest.TestCase):
     """Tap-to-talk with automatic end-of-speech, on synthetic audio."""
 

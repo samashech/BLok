@@ -196,6 +196,8 @@ class Backend:
             self.browser_context = None
             self.context.clear_search_context()
         self.cancel_all_approvals()
+        if self.hands_free is not None:
+            self.hands_free.close_window()
         self.emit(type="activity", state="idle")
         self.emit(type="level", value=0)
         self.status("ready", self.idle_message())
@@ -377,6 +379,7 @@ class Backend:
         if self.input_source not in ("voice", "hands_free") or self.listening or self.voice is not None \
                 or self.has_pending_approval():
             return
+        self.emit(type="wake", follow_up=True)   # the listening animation has to be on screen to mean anything
         if self.hands_free is not None:
             self.hands_free.listen_for_follow_up()
             self.emit(type="activity", state="idle", message="Listening for your next command…")
@@ -385,6 +388,18 @@ class Backend:
                 self.listen(follow_up=True)
             except Exception as error:
                 self.emit(type="engine", message="Follow-up listening failed: " + str(error))
+
+    def show_hands_free(self, state):
+        """The overlay follows the listener: animated only while it is really listening for you."""
+        if self.voice is not None or self.listening:
+            return                 # a tap recording owns the overlay
+        self.emit(type="level", value=0)
+        if state == "transcribing":
+            self.status("processing", "Transcribing locally…")
+            self.emit(type="activity", state="transcribing", message="Whisper is transcribing locally…")
+            return
+        self.status(*(("listening", "I'm listening…") if state == "listening" else ("ready", self.idle_message())))
+        self.emit(type="activity", state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
 
     def say_result(self, message, error=False):
         """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
@@ -1013,7 +1028,9 @@ class Backend:
             listener = HandsFreeListener(
                 on_command=lambda text: self.events.put((None, {"command": "hands_free_text", "text": text})),
                 on_wake=lambda early=False: self.events.put((None, {"command": "hands_free_wake", "early": early})),
-                paused=lambda: self.voice is not None or self.speaker.speaking())
+                paused=lambda: self.voice is not None or self.speaker.speaking(),
+                on_state=lambda state: self.events.put((None, {"command": "hands_free_state", "state": state})),
+                on_level=lambda value: self.events.put((None, {"command": "hands_free_level", "value": value})))
             listener.start()
             self.hands_free = listener
             from blok import speech
@@ -1420,7 +1437,9 @@ class Backend:
     def request(self, request):
         command = request.get("command")
         if command == "listen": self.listen()
-        elif command == "stop": self.stop()
+        elif command == "stop":
+            self.input_source = "typed"         # you hid the overlay or cancelled: no follow-up after this
+            self.stop()
         elif command == "finish": self.finish_recording()
         elif command == "text":
             if self.listening or self.voice is not None: self.stop()
@@ -1503,8 +1522,16 @@ class Backend:
                         self.emit(type="wake")
                         self.status("listening", "I'm listening…" if event.get("early") else "Yes? Say your command.")
                         continue
+                    if event.get("command") == "hands_free_state":
+                        self.show_hands_free(event["state"])
+                        continue
+                    if event.get("command") == "hands_free_level":
+                        if self.hands_free is not None and self.hands_free.shown == "listening":
+                            self.emit(type="level", value=event["value"])
+                        continue
                     if event.get("command") == "hands_free_text":
                         self.emit(type="wake")
+                        self.show_hands_free("idle")      # heard it: now BLoK is acting, not listening
                         self.transcript(event["text"], True, source="hands_free")
                         continue
                     if event.get("command") == "follow_up":

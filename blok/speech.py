@@ -291,6 +291,29 @@ END_SECONDS = float(os.environ.get('BLOK_END_SILENCE', '1.0'))   # a pause this 
 SPECULATE_SECONDS = 0.25        # start transcribing this far into a pause
 
 
+class LevelMeter:
+    """Your voice on a 0–1 scale for the overlay: decibels above the room's own noise.
+
+    Measured against the room because mics differ a lot (a laptop mic can sit at
+    -36 dB in silence), and how far you stand above the noise is what recognition
+    needs. The floor drops quickly and rises about 1 dB a second, so talking
+    doesn't count as noise. Feed it every frame, even when nothing is shown.
+    """
+    QUIET_MARGIN = 6.0      # room noise flickers this many dB above its floor
+    RANGE = 30.0            # dB above that which fills the meter
+
+    def __init__(self):
+        self.floor = None
+
+    def __call__(self, level: float) -> float:
+        import math
+        decibels = 20 * math.log10(max(level, 1e-6))
+        if self.floor is None:
+            self.floor = decibels
+        self.floor += (decibels - self.floor) * 0.05 if decibels < self.floor else 0.03
+        return max(0.0, min(1.0, (decibels - self.floor - self.QUIET_MARGIN) / self.RANGE))
+
+
 class VoiceDetector:
     """Silero VAD (shipped inside faster-whisper, ~2 MB), one 32 ms frame at a time.
 
@@ -453,7 +476,7 @@ class WhisperSession:
 
     def _read(self):
         import numpy
-        endpointer = Endpointer(self.end_silence, voice_detector())
+        endpointer, meter = Endpointer(self.end_silence, voice_detector()), LevelMeter()
         try:
             while True:
                 chunk = self.process.stdout.read(self.FRAME * 2)
@@ -463,8 +486,9 @@ class WhisperSession:
                 self.frames.append(frame)
                 event = endpointer.feed(frame)
                 now = time.monotonic()
-                if self.on_level and len(self.frames) % 3 == 0:   # about 11 updates a second
-                    self.on_level(min(1.0, endpointer.level * 8))
+                voice_level = meter(endpointer.level)
+                if self.on_level and len(self.frames) % 3 == 0:   # about 10 updates a second
+                    self.on_level(voice_level)
                 if event == 'start':
                     self.heard_speech = True
                 if self.heard_speech and event != 'end':
@@ -588,9 +612,13 @@ class HandsFreeListener:
     FRAME = FRAME               # 32 ms
     FOLLOW_UP_SECONDS = 20.0    # after BLoK has finished acting and talking
 
-    def __init__(self, on_command, on_wake=None, paused=lambda: False):
+    def __init__(self, on_command, on_wake=None, paused=lambda: False, on_state=None, on_level=None):
         self.on_command = on_command
         self.on_wake = on_wake or (lambda early=False: None)
+        self.on_state = on_state or (lambda state: None)   # 'listening', 'transcribing' or 'idle'
+        self.on_level = on_level or (lambda value: None)   # your voice, only while listening for you
+        self.shown = 'idle'
+        self.segment_id = 0
         self.addressed = False
         self.paused = paused
         self.process = None
@@ -617,11 +645,13 @@ class HandsFreeListener:
             item = self.queue.get()
             if item is None:
                 return
-            audio, addressed = item
+            audio, addressed, following = item
             try:
-                self.handle(audio, addressed)
+                self.handle(audio, addressed, following)
             except Exception:
-                pass
+                self._settle()
+            finally:
+                self.queue.task_done()
 
     def stop(self):
         self.running = False
@@ -636,13 +666,23 @@ class HandsFreeListener:
         pre_roll = collections.deque(maxlen=10)          # 320 ms before speech starts
         endpointer, segment = Endpointer(END_SECONDS, voice_detector()), None
         speculation = Speculation()
+        following, count, meter = False, 0, LevelMeter()
         while self.running:
             chunk = self.process.stdout.read(self.FRAME * 2)
             if len(chunk) < self.FRAME * 2:
                 break
             frame = numpy.frombuffer(chunk, dtype='<i2').astype('float32') / 32768.0
             event = endpointer.feed(frame)
+            count += 1
+            voice_level = meter(endpointer.level)
+            if self.shown == 'listening' and count % 3 == 0:     # about 10 updates a second
+                self.on_level(voice_level)
             if self.paused():
+                # BLoK can't hear you now, so it must not look like it can.
+                self.segment_id += 1
+                if self.shown == 'listening':
+                    self.close_window()
+                    self.on_state('idle')
                 # BLoK is talking (or a tap recording owns the mic): drop what the mic hears, so its
                 # own voice never sticks to the front of your next command.
                 segment = None
@@ -654,6 +694,11 @@ class HandsFreeListener:
                 pre_roll.append(frame)
                 if event == 'start':
                     segment = list(pre_roll)
+                    following = time.monotonic() < self.follow_until   # started in time, however long it runs
+                elif self.shown == 'listening' and self.follow_until and not self.queue.unfinished_tasks \
+                        and time.monotonic() >= self.follow_until:
+                    self.follow_until = 0.0
+                    self._show('idle')
                 continue
             segment.append(frame)
             if len(segment) == 35:   # ~1 s in (with pre-roll): is this "hey block"?
@@ -666,46 +711,68 @@ class HandsFreeListener:
                 endpointer.reset()
                 # Transcribe on another thread: the mic pipe holds ~2 s, and a command said right
                 # after "hey block" must not be lost while Whisper works on the name.
-                self.queue.put((audio, self.addressed))
+                self.queue.put((audio, self.addressed, following))
                 self.addressed = False
+                self.segment_id += 1
+                if self.shown == 'listening':
+                    self._show('transcribing')
             else:
                 speculation.follow(endpointer, segment)
 
     def _spot(self, audio):
         """React to the name while you're still talking: the overlay opens right away."""
+        segment = self.segment_id
         def run():
             try:
-                if spot_wake(audio):
+                if spot_wake(audio) and segment == self.segment_id:   # that utterance is still going
                     self.addressed = True
+                    self._show('listening')
                     self.on_wake(early=True)
             except Exception:
                 pass
         threading.Thread(target=run, daemon=True).start()
 
-    def handle(self, audio, addressed=None):
+    def handle(self, audio, addressed=None, started_following=False):
         # `audio` is the early transcript started during your pause, or the audio to transcribe now.
         text = audio.result() if hasattr(audio, 'result') else transcribe(audio)
         if not text:
+            self._settle()
             return
         now = time.monotonic()
         woke, command = wake(text)
         if not woke and (self.addressed if addressed is None else addressed):
             # The fast check heard the name even if the full transcript spells it oddly.
             woke, command = True, clean_command(' '.join(text.split()[1:]) if len(text.split()) > 1 else '')
-        following = now < self.follow_until
+        following = started_following or now < self.follow_until
         self.heard.append({'at': time.strftime('%H:%M:%S'), 'text': text, 'acted': woke or following,
                            'command': command if woke else (text if following else '')})
-        if woke:
+        if woke and not command:
+            self.follow_until = now + self.FOLLOW_UP_SECONDS
+            self._show('listening')
+            self.on_wake(early=False)
+        elif woke or following:
             self.follow_until = 0.0         # reopened once BLoK has answered
-            if command:
-                self.on_command(command)
-            else:
-                self.follow_until = now + self.FOLLOW_UP_SECONDS
-                self.on_wake(early=False)
-        elif following:
-            self.follow_until = 0.0
-            self.on_command(text.strip(' ,.!?'))
+            self.shown = 'idle'             # the command takes over what the overlay shows
+            self.on_command(command if woke else text.strip(' ,.!?'))
+        else:
+            self._settle()
+
+    def _show(self, state):
+        if state != self.shown:
+            self.shown = state
+            self.on_state(state)
+
+    def _settle(self):
+        """Nothing for BLoK in that utterance: back to waiting if the window is open, else off."""
+        self._show('listening' if time.monotonic() < self.follow_until else 'idle')
+
+    def close_window(self):
+        """Stop expecting a command. The caller updates the overlay."""
+        self.follow_until = 0.0
+        self.addressed = False
+        self.shown = 'idle'
 
     def listen_for_follow_up(self, seconds: float | None = None):
         """Accept the next command without the name for a while (called once BLoK has answered)."""
         self.follow_until = time.monotonic() + (seconds or self.FOLLOW_UP_SECONDS)
+        self._show('listening')

@@ -69,7 +69,7 @@ ShellRoot {
         if (event.type === "approval_request") pendingApproval = event
         if (event.type === "handsfree") handsFree = !!event.on
         if (event.type === "capture") capturing = !!event.hidden
-        if (event.type === "wake") { opened = true; typing = false }
+        if (event.type === "wake") { opened = true; if (!event.follow_up) typing = false }
         if (event.type === "approval_resolved") pendingApproval = null
         if (event.type === "ui_control") { let result = event.window === "BLoK · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)
@@ -169,9 +169,10 @@ ShellRoot {
                         primary: root.theme.orb
                         secondary: root.theme.orbSecondary || root.theme.orb
                         mode: root.orbMode
-                        active: panel.visible && surface.reveal > 0.65
+                        active: panel.visible && surface.reveal > 0.65 && root.orbMode !== "breathing"
                         reducedMotion: root.reducedMotion
                         Accessible.name: "Assistant: " + root.headline
+                        ListeningRings { anchors.centerIn: parent; on: root.listening; level: root.level; color: root.theme.success; square: !!root.theme.pixelFrame; reducedMotion: root.reducedMotion }
                     }
                     ThinkingOrb {
                         id: orb
@@ -180,10 +181,11 @@ ShellRoot {
                         tint: root.theme.orb
                         dark: root.theme.mode !== "light"
                         mode: root.orbMode
-                        active: panel.visible && surface.reveal > 0.65
+                        active: panel.visible && surface.reveal > 0.65 && root.orbMode !== "breathing"
                         audioLevel: root.level
                         reducedMotion: root.reducedMotion
                         Accessible.name: "Assistant: " + root.headline
+                        ListeningRings { anchors.centerIn: parent; on: root.listening; level: root.level; color: root.theme.success; square: !!root.theme.pixelFrame; reducedMotion: root.reducedMotion }
                     }
                     ColumnLayout {
                         Layout.fillWidth: true; spacing: 4
@@ -197,6 +199,12 @@ ShellRoot {
                             text: root.headline
                             color: root.theme.foreground; font.family: root.theme.font; font.pixelSize: (root.theme.id === "omarchy" || root.theme.ring) ? 15 : 17; font.weight: root.theme.pixelFrame ? Font.Bold : Font.Medium
                             elide: Text.ElideRight
+                        }
+                        VoiceMeter {
+                            visible: root.listening
+                            level: root.level
+                            low: root.theme.muted; good: root.theme.success; high: root.theme.error; off: root.theme.hover
+                            font: root.theme.font; square: !!root.theme.pixelFrame
                         }
                     }
                     ToolButton {

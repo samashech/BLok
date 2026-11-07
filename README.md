@@ -202,7 +202,7 @@ Ctrl+. ─► Whisper (local) ─► speech cleanup ─► rules ─────
 | `BLOK_HOME` / `BLOK_DATA` | Where models, the Python environment and your data live |
 | `BLOK_REDUCED_MOTION=1` | No reveal or ring animation |
 
-BLoK ends a recording about a second after you stop talking; set `BLOK_END_SILENCE` (seconds) if it cuts you off mid-thought or waits too long. If you say nothing, it gives up after 7 seconds. While you talk, the orb follows your voice.
+BLoK ends a recording about a second after you stop talking; set `BLOK_END_SILENCE` (seconds) if it cuts you off mid-thought or waits too long. If you say nothing, it gives up after 7 seconds. While BLoK is listening for you, rings ripple around the orb and a meter shows how loud it hears you (Quiet, Good or Loud, measured against your room's noise). When it isn't listening, the rings and meter disappear and the orb goes still.
 
 Names Whisper gets wrong (artists, games, friends) go one per line in `~/.config/blok/words.txt`. If recognition is poor, run `blok mic-test`: it shows your input level and exactly what Whisper heard.
 

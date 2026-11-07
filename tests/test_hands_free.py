@@ -147,6 +147,122 @@ class ListenerTests(unittest.TestCase):
         self.assertEqual((self.wakes, self.commands), ([False], ['open YouTube']))
 
 
+class ListeningStateTests(unittest.TestCase):
+    """The animation is on only while BLoK really is listening for you."""
+    def listener(self, **kw):
+        self.states, self.commands = [], []
+        return HandsFreeListener(self.commands.append, on_state=self.states.append, **kw)
+
+    def feed(self, heard, *parts):
+        stream = numpy.concatenate(parts)
+        heard.process = Mock(stdout=io.BytesIO((stream * 32767).astype('<i2').tobytes()))
+        heard.running = True
+        with patch.dict('os.environ', {'BLOK_VAD': 'loudness'}), patch.object(speech, 'transcribe', return_value=''):
+            heard._loop()
+
+    def test_name_turns_it_on_and_the_command_turns_it_off(self):
+        heard = self.listener()
+        with patch.object(speech, 'transcribe', side_effect=['Hey Block.', 'open a new tab']):
+            heard.handle(numpy.zeros(1))
+            self.assertEqual(heard.shown, 'listening')
+            heard.handle(numpy.zeros(1))
+        self.assertEqual(heard.shown, 'idle')
+        self.assertEqual(self.commands, ['open a new tab'])
+
+    def test_false_alarm_turns_it_back_off(self):
+        heard = self.listener()
+        heard._show('listening')                 # the fast check thought it heard the name
+        with patch.object(speech, 'transcribe', return_value='the weather is nice'):
+            heard.handle(numpy.zeros(1), addressed=False)
+        self.assertEqual(self.states, ['listening', 'idle'])
+        self.assertEqual(self.commands, [])
+
+    def test_unclear_audio_keeps_waiting_while_the_window_is_open(self):
+        heard = self.listener()
+        heard.listen_for_follow_up()
+        with patch.object(speech, 'transcribe', return_value=''):
+            heard.handle(numpy.zeros(1))
+        self.assertEqual(heard.shown, 'listening')
+
+    def test_window_running_out_turns_it_off(self):
+        heard = self.listener()
+        heard.listen_for_follow_up(0.05)
+        time.sleep(0.06)
+        self.feed(heard, numpy.zeros(16000))
+        self.assertEqual(self.states, ['listening', 'idle'])
+
+    def test_blok_talking_turns_it_off(self):
+        heard = self.listener(paused=lambda: True)
+        heard.listen_for_follow_up()
+        self.feed(heard, numpy.zeros(16000))
+        self.assertEqual(self.states, ['listening', 'idle'])
+        self.assertEqual(heard.follow_until, 0.0)
+
+    def test_it_shows_transcribing_once_you_stop_talking(self):
+        heard = self.listener()
+        heard.listen_for_follow_up()
+        self.feed(heard, tone(1.0), noise(1.5))
+        self.assertEqual(self.states, ['listening', 'transcribing'])
+
+    def test_voice_level_is_only_sent_while_listening(self):
+        levels = []
+        heard = self.listener(on_level=levels.append)
+        self.feed(heard, tone(0.5))
+        self.assertEqual(levels, [])
+        heard.listen_for_follow_up()
+        self.feed(heard, noise(0.5), tone(0.5))
+        self.assertGreater(max(levels), 0.25)
+
+    def test_a_command_started_just_before_the_window_closed_still_counts(self):
+        heard = self.listener()
+        with patch.object(speech, 'transcribe', return_value='search for games'):
+            heard.handle(numpy.zeros(1), started_following=True)
+        self.assertEqual(self.commands, ['search for games'])
+
+    def test_late_wake_check_is_ignored_once_the_utterance_is_over(self):
+        heard = self.listener()
+        release = __import__('threading').Event()
+        def slow(audio):
+            release.wait(1)
+            return True
+        with patch.object(speech, 'spot_wake', side_effect=slow):
+            heard._spot(numpy.zeros(1))
+            heard.segment_id += 1
+            release.set()
+            time.sleep(0.05)
+        self.assertEqual((heard.shown, heard.addressed), ('idle', False))
+
+
+class HandsFreeOverlayTests(unittest.TestCase):
+    def setUp(self):
+        self.backend = Backend()
+        self.backend.emit = Mock()
+
+    def emitted(self, kind):
+        return [call.kwargs for call in self.backend.emit.call_args_list if call.kwargs.get('type') == kind]
+
+    def test_states_reach_the_overlay(self):
+        self.backend.show_hands_free('listening')
+        self.assertEqual(self.emitted('status')[-1]['state'], 'listening')
+        self.backend.show_hands_free('transcribing')
+        self.assertEqual(self.emitted('activity')[-1]['state'], 'transcribing')
+        self.backend.show_hands_free('idle')
+        self.assertEqual(self.emitted('status')[-1]['state'], 'ready')
+        self.assertEqual(self.emitted('activity')[-1]['state'], 'idle')
+        self.assertEqual(self.emitted('level')[-1]['value'], 0)
+
+    def test_a_tap_recording_keeps_its_own_overlay(self):
+        self.backend.voice = Mock()
+        self.backend.show_hands_free('idle')
+        self.backend.voice = None
+        self.assertEqual(self.emitted('status'), [])
+
+    def test_stop_closes_the_window(self):
+        self.backend.hands_free = Mock()
+        self.backend.stop()
+        self.backend.hands_free.close_window.assert_called_once_with()
+
+
 class HandsFreeToolTests(unittest.TestCase):
     def setUp(self):
         self.backend = Backend()
