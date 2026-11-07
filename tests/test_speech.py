@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import numpy
 from unittest.mock import patch, Mock
 from blok.speech import VoxtypeSession
 
@@ -43,6 +44,65 @@ class VoxtypeTests(unittest.TestCase):
         voice=VoxtypeSession();voice.run=Mock()
         voice.cancel();voice.close()
         voice.run.assert_not_called()
+
+
+class EchoRemovalTests(unittest.TestCase):
+    def setUp(self):
+        from blok import echo
+        self.assertFalse(echo.active(), 'a test left a real echo filter running')
+
+    def tearDown(self):
+        from blok import echo
+        echo._process = None
+
+    def running(self):
+        from blok import echo
+        echo._process = Mock(poll=Mock(return_value=None))
+
+    def test_records_the_filtered_mic_while_it_runs(self):
+        from blok import echo, speech
+        self.running()
+        self.assertEqual(speech.microphone(), ['--target', echo.SOURCE])
+
+    def test_uses_the_plain_mic_when_it_is_not_running(self):
+        from blok import echo, speech
+        with patch.dict(os.environ, {'BLOK_MIC': 'mic1'}):
+            self.assertEqual(speech.microphone(), ['--target', 'mic1'])
+            echo._process = Mock(poll=Mock(return_value=1))   # it died: back to the plain mic
+            self.assertEqual(speech.microphone(), ['--target', 'mic1'])
+
+    def test_can_be_turned_off_and_never_starts_without_a_mic(self):
+        from blok import echo
+        with patch('blok.echo.subprocess.Popen') as popen:
+            with patch.dict(os.environ, {'BLOK_ECHO_CANCEL': '0'}):
+                self.assertFalse(echo.start('mic1'))
+            with patch.dict(os.environ, {'BLOK_ECHO_CANCEL': ''}):
+                self.assertFalse(echo.start(''))
+        popen.assert_not_called()
+
+    def test_gives_up_cleanly_if_the_filter_exits(self):
+        from blok import echo
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'XDG_RUNTIME_DIR': folder, 'BLOK_ECHO_CANCEL': ''}), \
+             patch('blok.echo.shutil.which', return_value='/usr/bin/x'), \
+             patch('blok.echo.subprocess.Popen', return_value=Mock(poll=Mock(return_value=1))), patch('blok.echo.atexit.register'):
+            self.assertFalse(echo.start('mic1'))
+        self.assertFalse(echo.active())
+
+    def test_config_filters_the_named_mic_and_leaves_defaults_alone(self):
+        from blok import echo
+        config = echo.CONFIG % ('mic1', echo.SOURCE)
+        self.assertIn('target.object = "mic1"', config)
+        self.assertIn('monitor.mode = true', config)        # reference only: playback isn't rerouted
+        self.assertIn('priority.session = 0', config)       # never becomes the default mic
+
+    def test_soft_voice_only_passes_the_voice_check_with_the_filter_on(self):
+        from blok import speech
+        audio = numpy.zeros(16000, dtype='float32')
+        with patch.object(speech, 'voiced', return_value=True), patch.object(speech, 'whisper') as model:
+            model.return_value.transcribe.return_value = ([Mock(text='scroll down')], None)
+            self.assertEqual(speech.transcribe(audio), '')
+            self.running()
+            self.assertEqual(speech.transcribe(audio), 'scroll down')
 
 
 class VoiceMeterTests(unittest.TestCase):

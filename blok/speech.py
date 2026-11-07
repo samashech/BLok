@@ -16,6 +16,8 @@ import time
 import threading
 import tomllib
 
+from blok import echo
+
 class VoxtypeSession:
     def __init__(self):
         self.lock = threading.RLock()
@@ -198,6 +200,16 @@ def has_speech(audio) -> bool:
     return int(loud.sum()) >= 6  # at least ~0.2 s of voice
 
 
+def voiced(audio) -> bool:
+    """Does the voice detector hear ~0.2 s of speech? With the speakers filtered out, a soft
+    voice can be too quiet for the loudness check, and what's left in the mic is rarely a voice."""
+    detector = voice_detector()
+    if detector is None:
+        return False
+    usable = len(audio) // FRAME * FRAME
+    return sum(detector(frame) >= 0.5 for frame in audio[:usable].reshape(-1, FRAME)) >= 6
+
+
 _spotter = {'model': None, 'checked': False}
 
 
@@ -227,7 +239,7 @@ def spot_wake(audio) -> bool:
 
 def transcribe(audio) -> str:
     audio = audio - audio.mean()
-    if not has_speech(audio):
+    if not has_speech(audio) and not (echo.active() and voiced(audio)):
         return ''
     audio = normalize(audio)
     # Beam search 5 without the VAD trim: 0% word errors on accented test commands
@@ -261,8 +273,8 @@ def warm_up():
     threading.Thread(target=run, daemon=True).start()
 
 
-def microphone() -> list[str]:
-    """pw-record arguments that pick the microphone explicitly.
+def input_name() -> str:
+    """The real mic to use, by name.
 
     PipeWire's automatic routing can connect to a different (sometimes silent)
     input than the one your sound settings call the default, so BLoK asks for
@@ -276,6 +288,12 @@ def microphone() -> list[str]:
             name = found[1] if found else ''
         except (OSError, subprocess.SubprocessError):
             name = ''
+    return name
+
+
+def microphone() -> list[str]:
+    """pw-record arguments: the mic with the speakers filtered out, or the plain mic."""
+    name = echo.SOURCE if echo.active() else input_name()
     return ['--target', name] if name else []
 
 

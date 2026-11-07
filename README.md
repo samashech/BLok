@@ -196,6 +196,7 @@ Ctrl+. ─► Whisper (local) ─► speech cleanup ─► rules ─────
 | `BLOK_REPHRASE=0` / `BLOK_REPHRASE_MODEL` | Turn off or choose the Ollama rephraser |
 | `BLOK_MIC` | Microphone to use (a PipeWire node name from `pactl list sources short`); default: the one your sound settings mark as default |
 | `BLOK_END_SILENCE` | Pause (seconds, default 1.0) that ends a command |
+| `BLOK_ECHO_CANCEL=0` | Don't filter the speakers out of the mic (uses PipeWire's WebRTC echo canceller while BLoK runs) |
 | `BLOK_VAD=loudness` | Detect speech by loudness instead of the Silero voice detector |
 | `BLOK_FOLLOW_UP` / `BLOK_CONVERSATION=0` | How long to wait for a follow-up (seconds, default 20) / turn conversation mode off |
 | `BLOK_STT=voxtype` | Use a running Voxtype daemon instead of built-in Whisper |

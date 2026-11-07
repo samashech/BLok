@@ -1493,6 +1493,10 @@ class Backend:
         self.speaker.enabled = True
         self.speaker.warm_up()
         self.live = True
+        if os.environ.get('BLOK_STT') != 'voxtype':
+            from blok import echo, speech
+            if not echo.start(speech.input_name()) and os.environ.get('BLOK_ECHO_CANCEL') != '0':
+                print('Echo removal is unavailable: speakers can reach the microphone.', file=sys.stderr, flush=True)
         from blok.mcp_bridge import Bridge
         self.bridge = Bridge(self)
         self.bridge.start()

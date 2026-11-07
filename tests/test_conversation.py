@@ -64,9 +64,10 @@ class ConversationTests(unittest.TestCase):
         self.backend.voice = Mock(follow_up=True)
         self.backend.events.put((self.backend.generation, {'type': 'speech_text', 'text': ''}))
         self.backend.events.put((None, {'command': 'quit'}))
-        with patch.object(Backend, 'start_decisions'), patch('blok.backend.Bridge', create=True):
+        with patch.object(Backend, 'start_decisions'), patch('blok.mcp_bridge.Bridge'):
             self.backend.live = False
-            self.backend.main()
+            with patch('blok.echo.start', return_value=True):   # never a real audio filter in tests
+                self.backend.main()
         errors = [c for c in self.backend.speaker.say.call_args_list if "didn't hear" in str(c)]
         self.assertEqual(errors, [])
 
