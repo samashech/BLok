@@ -391,6 +391,18 @@ class Backend:
             except Exception as error:
                 self.emit(type="engine", message="Follow-up listening failed: " + str(error))
 
+    @staticmethod
+    def ASK_LANGUAGE(text):
+        """'speak in hindi', 'hindi mein bolo', 'use the english voice', 'match my language'."""
+        said = text.strip().strip('.!?').lower()
+        for language, word in (('hindi', r'hindi'), ('english', r'english|angrezi')):
+            if re.fullmatch(rf'(?:please )?(?:(?:speak|talk|reply|answer|respond)(?: to me)?(?: only)?(?: in)? (?:{word})|(?:use|switch to|change to)(?: the| a)? (?:{word})(?: voice)?|'
+                            rf'(?:{word})(?: voice)?(?: please)?|(?:{word}) (?:mein|me|main) (?:bolo|baat karo|jawab do)(?: na)?)', said):
+                return language
+        if re.fullmatch(r'(?:match my language|(?:speak|reply|answer) in (?:the language i (?:speak|use)|my language)|auto language|language auto|(?:speak|reply|answer) in auto)', said):
+            return 'auto'
+        return None
+
     def show_hands_free(self, state):
         """The overlay follows the listener: animated only while it is really listening for you."""
         if self.voice is not None or self.listening:
@@ -404,17 +416,40 @@ class Backend:
         self.emit(type="activity", state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
 
     def say_result(self, message, error=False):
-        """Speak a result; after a Hinglish command, answer in Hinglish with a Hindi voice."""
-        from blok.voice import spoken
+        """Speak a result: in Hindi after a Hinglish command, or always if you asked for Hindi."""
+        from blok.voice import hindi_voice, spoken
         from blok import hinglish
-        hindi = hinglish.reply(message, error=error, strict=True) if getattr(self, 'reply_hinglish', False) else None
-        if hindi is None and getattr(self, 'reply_hinglish', False) and len(message) < 50:
+        language = self.reply_language()
+        in_hindi = language == 'hindi' or (language == 'auto' and getattr(self, 'reply_hinglish', False))
+        hindi = hinglish.reply(message, error=error, strict=True) if in_hindi else None
+        if hindi is None and in_hindi and (error or len(message) < 50):
             hindi = hinglish.reply(message, error=error)     # short results get "हो गया"
         if hindi:
-            self.speaker.say(hindi, voice=os.environ.get('BLOK_HINDI_VOICE', 'hf_alpha'), lang='hi')
+            voice = hindi_voice()
+            self.speaker.say(hinglish.feminine(hindi) if voice.startswith('hf') else hindi, voice=voice, lang='hi')
         else:
             # Summaries and answers are English content; Hindi pronunciation would garble them.
             self.speaker.say(spoken(message, error=error))
+
+    def reply_language(self):
+        """'auto' answers in the language you spoke; 'hindi' or 'english' always use that one."""
+        try:
+            chosen = json.loads((DATA / 'settings.json').read_text()).get('reply_language')
+        except (OSError, ValueError, AttributeError):
+            return 'auto'
+        return chosen if chosen in ('hindi', 'english') else 'auto'
+
+    def set_reply_language(self, language):
+        try:
+            settings = json.loads((DATA / 'settings.json').read_text())
+        except (OSError, ValueError):
+            settings = {}
+        settings['reply_language'] = language
+        DATA.mkdir(parents=True, exist_ok=True)
+        (DATA / 'settings.json').write_text(json.dumps(settings, indent=2))
+        self.reply_hinglish = False
+        self.emit(type='action', message={'hindi': 'Speaking Hindi now.', 'english': 'Speaking English now.',
+                                          'auto': 'Answering in the language you speak.'}[language])
 
     def execute_plan(self, plan):
         self.worker_context.in_plan = True
@@ -1572,7 +1607,12 @@ class Backend:
         if source != "typed" and self.END_CONVERSATION.fullmatch(text.strip()):
             self.input_source = "typed"         # ends the conversation: no follow-up
             self.stop()
-            self.speaker.say("Okay.")
+            self.reply_hinglish = bool(re.search(r"\b(?:bas|ruko|ruk|theek|shukriya|dhanyavaad|dhanyawad)\b", text, re.I))
+            self.say_result("Okay.")
+            return
+        language = self.ASK_LANGUAGE(text)
+        if language:
+            self.set_reply_language(language)
             return
         # Stop is an immediate control, so a slow/failed model can never trap the mic.
         if text.strip().lower().strip(" .!?,") == "stop listening":

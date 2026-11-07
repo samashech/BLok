@@ -88,7 +88,7 @@ Layouts live in `~/.config/blok/layouts/` as plain JSON you can edit. Focus mode
 
 ## Hinglish
 
-BLoK understands everyday Hinglish and answers the same way, in a Hindi voice:
+BLoK understands everyday Hinglish and answers the same way, in a Hindi voice. To always answer in one language, say “speak in hindi”, “speak in english” or “match my language”, or run `blok language hindi|english|auto`. The Hindi voice only ever gets Hindi and the English voice only English: mixed text is split between them, and short names inside a Hindi sentence are written in Hindi script. `BLOK_HINDI_VOICE` picks the voice (`hm_omega`, `hm_psi`, `hf_alpha`, `hf_beta`):
 
 | You say | BLoK does |
 |---|---|

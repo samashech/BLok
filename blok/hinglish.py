@@ -6,6 +6,9 @@ with whole-phrase patterns rather than word swaps. Romanized spellings vary
 sound, so each verb accepts its common variants. Devanagari input is
 transliterated first. English text passes through unchanged.
 """
+import subprocess
+import shutil
+import functools
 import re
 
 # Verb endings that mark a Hinglish command, with their English meaning.
@@ -306,8 +309,72 @@ def to_devanagari(word: str) -> str:
     return ''.join(out) + suffix
 
 
-def devanagari_text(text: str) -> str:
-    return re.sub(r'[A-Za-z][A-Za-z\'-]*', lambda m: to_devanagari(m.group(0)), text)
+# Romanized Hindi words that aren't everyday English. A phrase with one of these is Hindi, spelled out.
+ROMAN_HINDI = re.compile(r"\b(?:hai|hain|nahi|nahin|kya|kaise|kyun|kaun|mein|mera|meri|tum|tumhara|tera|teri|aap|aapka|hum|yeh|woh|aur|lekin|bahut|"
+                         r"accha|achha|theek|gaana|gaane|chala|chalao|diya|kiya|karo|kar|kardo|pe|par|ka|ke|ki|ko|se|bhi|abhi|aaj|kal|ho|gaya|gayi|raha|rahi|"
+                         r"dil|pyaar|pyar|ishq|zindagi|sanam|jaan|mere|tere|hi)\b", re.I)
+IPA_VOWELS = [('eɪ', 'ए', 'े'), ('aɪ', 'आइ', 'ाइ'), ('ɔɪ', 'ऑय', 'ॉय'), ('aʊ', 'आउ', 'ाउ'), ('oʊ', 'ओ', 'ो'), ('iː', 'ई', 'ी'), ('uː', 'ऊ', 'ू'),
+              ('ɑː', 'आ', 'ा'), ('ɔː', 'ऑ', 'ॉ'), ('ɜː', 'अर', 'र'), ('ɪ', 'इ', 'ि'), ('ᵻ', 'इ', 'ि'), ('i', 'ई', 'ी'), ('ʊ', 'उ', 'ु'), ('u', 'ऊ', 'ू'),
+              ('ɛ', 'ए', 'े'), ('æ', 'ऐ', 'ै'), ('ʌ', 'अ', ''), ('ɐ', 'अ', ''), ('ə', 'अ', ''), ('ɚ', 'अर', 'र'), ('ɑ', 'आ', 'ा'), ('ɔ', 'ऑ', 'ॉ'), ('o', 'ओ', 'ो')]
+IPA_CONSONANTS = [('tʃ', 'च'), ('dʒ', 'ज'), ('p', 'प'), ('b', 'ब'), ('t', 'ट'), ('d', 'ड'), ('k', 'क'), ('ɡ', 'ग'), ('f', 'फ़'), ('v', 'व'), ('θ', 'थ'),
+                  ('ð', 'द'), ('s', 'स'), ('z', 'ज़'), ('ʃ', 'श'), ('ʒ', 'ज़'), ('h', 'ह'), ('m', 'म'), ('n', 'न'), ('ŋ', 'ंग'), ('l', 'ल'), ('ɹ', 'र'), ('r', 'र'),
+                  ('j', 'य'), ('w', 'व'), ('ɾ', 'ड')]
+HALANT = '्'
+
+
+def _from_ipa(ipa: str) -> str:
+    """English pronunciation, written in Hindi script: /seɪv/ → सेव."""
+    ipa = re.sub(r'[ˈˌ\s]', '', ipa)
+    out, i, after_consonant = '', 0, False
+    while i < len(ipa):
+        vowel = next((v for v in IPA_VOWELS if ipa.startswith(v[0], i)), None)
+        if vowel:
+            out += vowel[2] if after_consonant else vowel[1]
+            i += len(vowel[0])
+            after_consonant = False
+            continue
+        consonant = next((c for c in IPA_CONSONANTS if ipa.startswith(c[0], i)), None)
+        if consonant:
+            if after_consonant and not consonant[1].startswith('ं'):
+                out += HALANT
+            out += consonant[1]
+            i += len(consonant[0])
+            after_consonant = not consonant[1].startswith('ं')
+            continue
+        i += 1      # a mark this table doesn't need
+    return out
+
+
+@functools.lru_cache(maxsize=512)
+def _english_word(word: str) -> str | None:
+    """How an English word really sounds, in Hindi script; None if espeak-ng can't say."""
+    if not shutil.which('espeak-ng'):
+        return None
+    try:
+        ipa = subprocess.run(['espeak-ng', '-q', '--ipa', '-v', 'en-us', word], capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _from_ipa(ipa) or None
+
+
+# Spellings English uses and romanized Hindi doesn't: silent e, -ing, c without h, -es, and so on.
+ENGLISH_SPELLING = re.compile(r"[aeiou][bcdfgklmnprstvz]e$|ings?$|tion|ght|gn$|ck|^wh|x|q|c(?!h)|[^aeiou]es$|ea|oa|ou|ay$|ows?$|ew$|oo[kmn]$|(?:en|ch|ll|ss|pp|tt|rr)ed$", re.I)
+
+
+def devanagari_text(text: str, roman: bool | None = None) -> str:
+    """Latin letters → Hindi script. Hindi and Indian names are spelled out; English goes by how it sounds.
+
+    `roman=True` says the text is romanized Hindi. Otherwise a phrase with a Hindi word in it is
+    Hindi, and each other word is judged by its spelling ("Save" → सेव, "Arijit" → अरिजित).
+    """
+    hindi = bool(ROMAN_HINDI.search(text)) if roman is None else roman
+
+    def word(found):
+        said = found.group(0)
+        if hindi or said.lower() in NAMES or not ENGLISH_SPELLING.search(said):
+            return to_devanagari(said)
+        return _english_word(said) or to_devanagari(said)
+    return re.sub(r"[A-Za-z][A-Za-z']*", word, text)
 
 
 WEEKDAYS = {'Monday': 'सोमवार', 'Tuesday': 'मंगलवार', 'Wednesday': 'बुधवार', 'Thursday': 'गुरुवार', 'Friday': 'शुक्रवार',
@@ -346,6 +413,14 @@ REPLIES = [
     (r'Hands-free is on\..*', lambda m: 'हैंड्स फ़्री चालू है। ब्लॉक बोलकर कुछ भी कहिए'),
     (r'Hands-free is off\.', lambda m: 'हैंड्स फ़्री बंद कर दिया'),
     (r'Yes\?', lambda m: 'जी?'),
+    (r'Okay\.?', lambda m: 'ठीक है'),
+    (r'I can see "(?P<x>[^"]+)" in (?P<n>\d+) places.*', lambda m: f'{_name(m["x"])} {m["n"]} जगह दिख रहा है, इसलिए क्लिक नहीं किया। पूरा नाम बोलिए'),
+    (r'I can\'t see "(?P<x>[^"]+)".*', lambda m: f'{_name(m["x"])} नहीं दिख रहा'),
+    (r'No visible control named (?P<x>.+?)\.(?: Closest:.*)?', lambda m: f'{_name(m["x"])} नहीं मिला'),
+    (r'Which one: .*', lambda m: 'कौन सा? स्क्रीन पर देखिए'),
+    (r'This page has no search box\. Searched (?P<site>\S+) for (?P<q>.+)', lambda m: f'इस पेज पर सर्च नहीं है, इसलिए {_name(m["site"])} पर {_name(m["q"])} सर्च कर दिया'),
+    (r'Speaking Hindi now\.?', lambda m: 'अब मैं हिंदी में बोलूँगा'),
+    (r'Answering in the language you speak\.?', lambda m: 'अब आप जिस भाषा में बोलेंगे, उसी में जवाब दूँगा'),
     (r'Watching\..*', lambda m: 'देख रहा हूँ। एक बार करके दिखाइए, फिर बोलिए इसका नाम क्या रखूँ'),
     (r'Got it, (?P<n>\d+) steps\..*', lambda m: f'{m["n"]} स्टेप देख लिए। इसका नाम क्या रखूँ?'),
     (r'Learned "(?P<x>[^"]+)".*', lambda m: f'सीख लिया: {_name(m["x"])}'),
@@ -358,13 +433,38 @@ REPLIES = [
 ]
 
 
-def reply(message: str, error: bool = False, strict: bool = False) -> str | None:
-    """The reply in Hindi (Devanagari) for Kokoro's Hindi mode; the overlay keeps the English details."""
-    text = message.strip()
-    for pattern, build in REPLIES:
+EFFECTS = [
+    (r'opened a new tab', lambda m: 'नया टैब खुल गया'),
+    (r'opened a new window', lambda m: 'नई विंडो खुल गई'),
+    (r'the page changed', lambda m: 'पेज बदल गया'),
+    (r'the window changed', lambda m: 'विंडो बदल गई'),
+    (r'nothing visibly changed', lambda m: 'पर कुछ बदला नहीं दिखा'),
+    (r'focus moved to another window', lambda m: 'दूसरी विंडो पर आ गए'),
+    (r'downloading (?P<x>.+)', lambda m: f'{_name(m["x"])} डाउनलोड हो रहा है'),
+]
+
+
+def feminine(text: str) -> str:
+    """The same reply for a female voice: the replies are written in the masculine."""
+    return text.replace('रहा हूँ', 'रही हूँ').replace('बोलूँगा', 'बोलूँगी')
+
+
+def _match(rules, text: str) -> str | None:
+    for pattern, build in rules:
         m = re.fullmatch(pattern, text)
         if m:
             return build(m)
+    return None
+
+
+def reply(message: str, error: bool = False, strict: bool = False) -> str | None:
+    """The reply in Hindi (Devanagari) for Kokoro's Hindi mode; the overlay keeps the English details."""
+    text = re.sub(r'\s*·\s*result not verified', '', message.strip())
+    head, *notes = [part.strip() for part in text.split(' · ')]     # "Clicked Save · the page changed"
+    said = _match(REPLIES, head)
+    if said:
+        extra = [_match(EFFECTS, note) for note in notes]
+        return '। '.join([said] + [e for e in extra if e])
     if strict:
         return None
     return 'माफ़ कीजिए, यह नहीं हो पाया' if error else 'हो गया'

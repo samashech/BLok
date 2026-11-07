@@ -74,7 +74,7 @@ class BackendHinglishTests(unittest.TestCase):
             backend.emit(type='action', message='Opened youtube')
         backend.submit_decision.assert_called_once_with('open youtube')
         call = backend.speaker.say.call_args
-        self.assertEqual((call[0][0], call[1]['voice'], call[1]['lang']), ('यूट्यूब खोल दिया', 'hf_alpha', 'hi'))
+        self.assertEqual((call[0][0], call[1]['voice'], call[1]['lang']), ('यूट्यूब खोल दिया', 'hm_omega', 'hi'))
 
     def test_english_command_keeps_the_english_voice(self):
         backend = Backend()

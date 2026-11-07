@@ -84,6 +84,71 @@ def spoken(message: str, error: bool = False) -> str:
     return text
 
 
+HINDI_DEFAULT, ENGLISH_DEFAULT = 'hm_omega', 'af_heart'
+DEVANAGARI = re.compile('[\u0900-\u097f]')
+LATIN = re.compile('[A-Za-z]')
+ENGLISH_WORDS = re.compile(r"\b(?:the|is|are|was|and|of|to|for|in|on|at|you|your|this|that|with|it|an|from|has|have|not|i)\b", re.I)
+
+
+def hindi_voice(wanted: str | None = None) -> str:
+    """A Hindi voice, whatever was asked for. Only hf_ and hm_ voices can speak Hindi."""
+    voice = wanted or os.environ.get('BLOK_HINDI_VOICE') or HINDI_DEFAULT
+    return voice if voice[:2] in ('hf', 'hm') else HINDI_DEFAULT
+
+
+def english_voice(wanted: str | None = None) -> str:
+    """An English voice, whatever was asked for. Kokoro's a_ and b_ voices are the English ones."""
+    voice = wanted or os.environ.get('BLOK_KOKORO_VOICE') or ENGLISH_DEFAULT
+    return voice if voice[:1] in ('a', 'b') else ENGLISH_DEFAULT
+
+
+def _is_roman_hindi(text: str) -> bool:
+    words = re.findall(r"[A-Za-z']+", text)
+    from blok.hinglish import ROMAN_HINDI
+    found = ROMAN_HINDI.findall(text)
+    return len({word.lower() for word in found}) >= 2 and len(found) / max(len(words), 1) >= 0.3 and not ENGLISH_WORDS.search(text)
+
+
+def language_parts(text: str) -> list[tuple[str, str]]:
+    """Split text into ('hi', Devanagari only) and ('en', Latin only) pieces, in order.
+
+    This is what keeps the voices apart: the Hindi voice never gets English letters and the
+    English voice never gets Hindi. A few English words in a Hindi sentence are usually names,
+    so they're written in Hindi script and stay in the sentence. A longer stretch of English
+    gets the English voice, and so does anything mostly English around a Hindi phrase.
+    """
+    from blok.hinglish import devanagari_text
+    if not DEVANAGARI.search(text) and _is_roman_hindi(text):
+        text = devanagari_text(text, roman=True)
+    runs: list[list] = []
+    for word in text.split():
+        lang = 'hi' if DEVANAGARI.search(word) else 'en' if LATIN.search(word) else None
+        if lang is None and runs:
+            lang = runs[-1][0]          # digits and punctuation stay with what they follow
+        if runs and (runs[-1][0] == lang or runs[-1][0] is None):
+            runs[-1][0] = lang
+            runs[-1][1].append(word)
+        else:
+            runs.append([lang, [word]])
+    hindi_words = sum(len(words) for lang, words in runs if lang == 'hi')
+    latin_words = sum(len(words) for lang, words in runs if lang == 'en')
+    parts: list[tuple[str, str]] = []
+    for lang, words in runs:
+        piece = ' '.join(words)
+        if lang == 'en' and hindi_words and hindi_words >= latin_words and len(words) <= 3:
+            lang, piece = 'hi', devanagari_text(piece)
+        elif lang == 'hi' and LATIN.search(piece):
+            piece = devanagari_text(piece)     # one word in both scripts
+        lang = lang or 'en'
+        if not re.search(r'\w', piece):
+            continue
+        if parts and parts[-1][0] == lang:
+            parts[-1] = (lang, parts[-1][1] + ' ' + piece)
+        else:
+            parts.append((lang, piece))
+    return parts
+
+
 class Speaker:
     def __init__(self, settings_path: Path | None = None, on_notice=None, enabled=True):
         self.enabled = enabled
@@ -92,6 +157,7 @@ class Speaker:
         self.lock = threading.Lock()
         self.player = None
         self.generation = 0
+        self.talking = None         # which reply is still being made or played
         self.warned = False
 
     def mode(self) -> str:
@@ -119,23 +185,38 @@ class Speaker:
                 current = (current + ' ' + part).strip()
         if current:
             chunks.append(current)
-        if not chunks or self.mode() == 'off':
+        self._play(chunks, voice)
+
+    def _play(self, chunks, voice=None):
+        """Speak these in order, each piece in the voice for its own language. Any new speech, or stop(), ends it."""
+        mode = self.mode()
+        if not chunks or mode == 'off':
             return
         self.stop()
         with self.lock:
             generation = self.generation
+            self.talking = generation
         def run():
-            for chunk in chunks:
-                if not self._current(generation):
-                    return
-                self.next_voice, self.next_lang = voice, lang
-                self._speak(chunk, self.mode(), generation)
-                player = self.player
-                while player and player.poll() is None and self._current(generation):
-                    time.sleep(0.05)
+            try:
+                for chunk in chunks:
+                    for lang, piece in language_parts(chunk):
+                        if not self._current(generation):
+                            return
+                        chosen = hindi_voice(voice if voice and voice[:2] in ('hf', 'hm') else None) if lang == 'hi' \
+                            else english_voice(voice if voice and voice[:1] in ('a', 'b') else None)
+                        self._speak(piece, mode, generation, chosen, 'hi' if lang == 'hi' else None)
+                        player = self.player
+                        while player and player.poll() is None and self._current(generation):
+                            time.sleep(0.05)
+            finally:
+                if self.talking == generation:
+                    self.talking = None
         threading.Thread(target=run, daemon=True).start()
 
     def speaking(self) -> bool:
+        """True from the moment a reply is asked for, including while its audio is being made."""
+        if self.talking is not None and self.talking == self.generation:
+            return True
         player = self.player
         return bool(player and player.poll() is None)
 
@@ -147,16 +228,10 @@ class Speaker:
             player.terminate()
 
     def say(self, text: str, voice: str | None = None, lang: str | None = None):
-        """Speak `text`; `voice`/`lang` apply to this reply only (Hindi replies: an hf_/hm_ voice and lang 'hi')."""
-        self.next_voice, self.next_lang = voice, lang
+        """Speak `text`. The language of the words picks the voice, so `voice` is only a preference."""
         text = (text or '').strip()
-        mode = self.mode()
-        if not text or mode == 'off':
-            return
-        self.stop()
-        with self.lock:
-            generation = self.generation
-        threading.Thread(target=self._speak, args=(text, mode, generation), daemon=True).start()
+        if text:
+            self._play([text], voice)
 
     def _current(self, generation):
         return generation == self.generation
@@ -175,18 +250,18 @@ class Speaker:
 
     @staticmethod
     def kokoro_voice():
-        return os.environ.get('BLOK_KOKORO_VOICE', 'af_heart')
+        return english_voice()
 
-    def _speak(self, text, mode, generation):
+    def _speak(self, text, mode, generation, voice=None, lang=None):
         if mode == 'kokoro':
             try:
-                self._kokoro(text, generation)
+                self._kokoro(text, generation, voice, lang)
                 return
             except Exception as error:
                 if not self.warned:
                     self.warned = True
                     self.on_notice('Kokoro voice failed (' + str(error)[:120] + '); using espeak.')
-            self._local(text, generation)
+            self._local(text, generation, lang)
             return
         if mode == 'elevenlabs':
             try:
@@ -196,20 +271,20 @@ class Speaker:
                 if not self.warned:
                     self.warned = True
                     self.on_notice('ElevenLabs voice failed (' + str(error)[:120] + '); using the local voice.')
-        self._local(text, generation)
+        self._local(text, generation, lang)
 
-    def _local(self, text, generation):
+    def _local(self, text, generation, lang=None):
         command = os.environ.get('BLOK_TTS_CMD')
-        espeak = ['espeak-ng', '-s', '165'] + (['-v', 'hi'] if getattr(self, 'next_lang', None) == 'hi' else [])
+        espeak = ['espeak-ng', '-s', '165'] + (['-v', 'hi'] if lang == 'hi' else [])
         args = command.split() + [text] if command else (espeak + [text] if shutil.which('espeak-ng') else None)
         if args:
             self._start(args, generation)
 
-    def _kokoro(self, text, generation):
+    def _kokoro(self, text, generation, voice=None, lang=None):
         import soundfile
         speed = float(os.environ.get('BLOK_KOKORO_SPEED', '1.05'))
-        voice = getattr(self, 'next_voice', None) or self.kokoro_voice()
-        lang = getattr(self, 'next_lang', None) or 'en-us'
+        lang = lang or 'en-us'
+        voice = hindi_voice(voice) if lang == 'hi' else english_voice(voice)
         samples, rate = kokoro().create(text, voice=voice, speed=speed if lang == 'en-us' else 1.0, lang=lang)
         if not self._current(generation):
             return
