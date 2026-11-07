@@ -391,6 +391,109 @@ class Backend:
             except Exception as error:
                 self.emit(type="engine", message="Follow-up listening failed: " + str(error))
 
+    def game_memory(self):
+        from blok import game
+        return game.Memory(DATA / 'games' / 'slither.jsonl')
+
+    def game_language(self, spoke_hindi=None):
+        language = self.reply_language()
+        if language != 'auto':
+            return language == 'hindi'
+        return getattr(self, 'reply_hinglish', False) if spoke_hindi is None else spoke_hindi
+
+    def game_command(self, text):
+        """'start commentary', 'be quiet', 'what happened'... True if this was about the game."""
+        from blok import chat, game
+        if self.has_pending_approval() or self.context.watching:
+            return False
+        kind, spoke_hindi = game.understand(text)
+        watching = getattr(self, 'game_watch', None)
+        if kind is None or (kind in ('mute', 'unmute', 'stop') and not watching):
+            return False
+        hindi = self.game_language(spoke_hindi)
+        self.reply_hinglish = hindi
+        if kind == 'start':
+            try:
+                self.start_game_watch(hindi)
+            except RuntimeError as error:     # the extension needs reloading, or the browser is closed
+                self.emit(type="action", error=True, message=str(error))
+        elif kind == 'stop':
+            self.stop_game_watch(hindi)
+        elif kind in ('mute', 'unmute'):
+            watching['commentator'].muted = kind == 'mute'
+            self.speak_game(game.line('muted' if kind == 'mute' else 'unmuted', hindi))
+        else:
+            session = watching['session'] if watching else None
+            self.speak_game(game.answer(kind, self.game_memory(), session, hindi, time.monotonic()))
+        return True
+
+    def speak_game(self, text):
+        """An answer during a game. The overlay soon gets out of the way, because you steer with the mouse."""
+        from blok import chat
+        self.speak_chat(chat.Reply(text))
+        if getattr(self, 'game_watch', None):
+            threading.Timer(6.0, lambda: self.emit(type="dismiss")).start()
+
+    def start_game_watch(self, hindi):
+        from blok import game
+        if getattr(self, 'game_watch', None):
+            self.speak_game(game.line('watching', hindi, name=self.user_name(), name_hi=self.user_name_hindi()))
+            return
+        self.require_extension('Game commentary', 'phase13-v1')
+        now = time.monotonic()
+        memory = self.game_memory()
+        watch = {'session': game.Session(best=memory.best(), now=now), 'commentator': game.Commentator(now), 'stop': threading.Event(), 'memory': memory}
+        self.game_watch = watch
+        memory.add('session_start', {'best': memory.best()})
+        threading.Thread(target=self.watch_game, args=(watch,), daemon=True).start()
+        in_game = self.game_tab_in_front()
+        self.speak_game(game.line('watching' if in_game else 'waiting', hindi, name=self.user_name(), name_hi=self.user_name_hindi()))
+
+    def game_tab_in_front(self):
+        from blok import game
+        try:
+            return game.is_game_page(browser.request({'action': 'active'}, timeout=1).get('url'))
+        except RuntimeError:
+            return False
+
+    def stop_game_watch(self, hindi):
+        from blok import game
+        watch, self.game_watch = self.game_watch, None
+        watch['stop'].set()
+        summary = game.answer('summary', watch['memory'], watch['session'], hindi, time.monotonic())
+        watch['memory'].add('session_end', watch['session'].summary())
+        self.speak_chat(__import__('blok.chat', fromlist=['Reply']).Reply(('कमेंट्री बंद। ' if hindi else 'Commentary off. ') + summary))
+
+    def user_name_hindi(self):
+        from blok import hinglish
+        name = self.user_name()
+        return hinglish.devanagari_text(name, roman=True) if name else None
+
+    def watch_game(self, watch):
+        """About once a second, read the numbers on the game's page. It only ever reads.
+
+        Switching to another tab or app just pauses it. That isn't a death.
+        """
+        from blok import game
+        while not watch['stop'].wait(1.0):
+            try:
+                seen = browser.request({'action': 'page_text'}, timeout=2)
+            except RuntimeError:
+                continue
+            if not game.is_game_page(seen.get('url')):
+                continue
+            self.game_tick(watch, game.read_state(seen.get('text')), time.monotonic())
+
+    def game_tick(self, watch, state, now):
+        from blok import game
+        events = watch['session'].feed(state, now)
+        for event in events:
+            watch['memory'].add(event.kind, event.data)
+        listening = self.hands_free is not None and self.hands_free.shown != 'idle'
+        chosen = watch['commentator'].choose(events, now, self.speaker.speaking() or listening or self.voice is not None, state)
+        if chosen:
+            self.speaker.say(game.remark(chosen, self.game_language(), self.user_name(), self.user_name_hindi()))
+
     def chat(self, text):
         """Small talk gets answered by BLoK itself. True if this was chat. A yes or no to a card, or a
         name for a skill you just taught it, isn't chat."""
@@ -936,7 +1039,7 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1', 'phase13-v1')
 
     def browser_in_front(self):
         try:
@@ -1365,7 +1468,7 @@ class Backend:
 
     def has_snapshots(self):
         try:
-            return self.extension_version()=='phase12-v1'
+            return self.extension_version() in self.EXTENSION_VERSIONS[self.EXTENSION_VERSIONS.index('phase12-v1'):]
         except RuntimeError:
             return False
 
@@ -1661,6 +1764,8 @@ class Backend:
         if not final:
             return
         self.input_source = source
+        if self.game_command(text):
+            return
         if self.chat(text):
             return
         if source != "typed" and self.END_CONVERSATION.fullmatch(text.strip()):

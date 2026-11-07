@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase12-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase13-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -171,6 +171,10 @@ export async function run(req, progress=()=>{}) {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
       return confirmed('Pointing at '+found.name,'Control under the mouse observed',{...found,tabId:tab.id});
+    }
+    if(task.action==='page_text') {
+      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
+      return {...await page({op:'page_text'}),tabId:tab.id};
     }
     if(task.action==='snapshot') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');

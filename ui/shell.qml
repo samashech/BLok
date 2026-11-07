@@ -70,6 +70,7 @@ ShellRoot {
         if (event.type === "handsfree") handsFree = !!event.on
         if (event.type === "capture") capturing = !!event.hidden
         if (event.type === "wake") { opened = true; if (!event.follow_up) typing = false }
+        if (event.type === "dismiss" && !hasApproval && !typing) opened = false
         if (event.type === "approval_resolved") pendingApproval = null
         if (event.type === "ui_control") { let result = event.window === "BLoK · Notes" ? notes.control(event) : camera.control(event); root.send({command: "feedback", message: result}) }
         if (event.type === "note") notes.loadNote(event)

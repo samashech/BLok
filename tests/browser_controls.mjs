@@ -74,6 +74,11 @@ try{
  await page.locator('button:text-is("Menu")').evaluate(e=>e.outerHTML='<button aria-expanded="true">Changed</button>');
  await assert.rejects(page.evaluate(pageAction,{op:'click',control:byName['Menu'].control,page:snap.page}),/changed after observation/);
  console.log('PASS: page snapshots: compact, on-screen first, no field contents');
+ await page.setContent('<div>Your length: 40</div><div style="display:none">hidden 999</div><input value="secret typed text">');
+ const seenText=await page.evaluate(pageAction,{op:'page_text'});
+ assert.match(seenText.text,/Your length: 40/);
+ assert.doesNotMatch(seenText.text,/hidden 999|secret typed text/);
+ console.log('PASS: page text is only what is showing, not hidden text or field contents');
  await page.setContent('<button>Save</button>');
  assert.equal((await page.evaluate(pageAction,{op:'click',target:'Save'})).verified,false);
  await page.setContent('<label>Name<input oninput="queueMicrotask(()=>this.value=\'original\')"></label>');

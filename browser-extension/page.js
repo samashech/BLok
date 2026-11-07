@@ -95,6 +95,10 @@ export async function pageAction(request, captureErrors=false) {
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
   }
+  if(request.op==='page_text') {
+    // Only the words showing on the page. Nothing on it is changed.
+    return {url:location.href,title:document.title,text:document.body.innerText.slice(0,6000)};
+  }
   if(request.op==='snapshot') {
     // One compact entry per control, what's on screen first. Field contents are never read.
     const inView=e=>{const r=e.getBoundingClientRect();return r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth;};

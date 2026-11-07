@@ -86,6 +86,20 @@ BLoK speaks Hyprland, so it can arrange your desktop, not just open apps.
 
 Layouts live in `~/.config/blok/layouts/` as plain JSON you can edit. Focus mode hides apps matching `BLOK_FOCUS_HIDE` (a regex of window classes) and puts everything back exactly where it was. In Hinglish: “focus mode chalu karo”, “code left mein aur browser right mein rakho”, “coding layout lagao”.
 
+## Watching you play
+
+Open [slither.io](https://slither.io), say “start commentary”, and play. BLoK reacts to big meals, milestones, your rank, personal records and every death, and otherwise leaves you alone. It reads your length, rank and the leaderboard from the page about once a second. It never touches the game or sends it anything, and it doesn't play for you.
+
+| Say | What happens |
+|---|---|
+| “start commentary” · “watch me play” · “commentary shuru karo” | It starts watching |
+| “be quiet” · “chup raho” / “you can talk again” | Stops or restarts the talking; it keeps keeping score |
+| “what happened” · “how am I doing” · “kya hua” | A summary of this session |
+| “what's my high score” · “how many times did I die” · “what's my rank” | Answers from what it recorded |
+| “stop commentary” · “game over” | Stops, and sums up the session |
+
+Everything it sees goes in a timeline on this computer (`data/games/slither.jsonl`), so it remembers your record and past games after a restart. It only knows what the numbers show: it can tell you died, but not who got you. This needs the browser extension updated to `phase13`: reload it in `brave://extensions`, then reload the game's page.
+
 ## Talking to it
 
 BLoK is good company as well as a tool. Ask its name, how it's doing, who made it, or for a (bad) joke, in English or Hinglish: “what's your name”, “tell me a joke”, “kaise ho”, “ek joke sunao”. Say “my name is …” and it remembers, on this computer only. Goodbye and thanks close the conversation; anything else keeps it going.
