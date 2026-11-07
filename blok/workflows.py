@@ -22,6 +22,8 @@ def task_label(task):
         return ('Play video ' if task.get('play') else 'Open search result ') + str(task['index'])
     if action == 'navigate':
         return 'Navigate to ' + task.get('url', '')
+    if action == 'site_search':
+        return 'Search this site for ' + task.get('query', '')
     if action == 'click':
         return 'Click ' + task.get('target', '')
     return 'Fill the ' + task.get('target', '') + ' field with ' + task.get('text', '')

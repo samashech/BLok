@@ -138,19 +138,6 @@ class SearchContextTtlAndValidationTests(unittest.TestCase):
             self.assertEqual(ctx['tabId'], 12)
             self.assertEqual(ctx['site'], 'google')
 
-    def test_search_context_expires_after_5_minutes(self):
-        # Seed search context older than 300 seconds
-        self.backend.browser_context = {
-            'tabId': 12,
-            'url': 'https://www.google.com/search?q=arch',
-            'site': 'google',
-            'query': 'arch',
-            'created_at': time.monotonic() - 301
-        }
-        with self.assertRaisesRegex(RuntimeError, 'No current search results'):
-            self.backend.require_browser_context()
-        self.assertIsNone(self.backend.browser_context)
-
     def test_search_context_invalidated_when_tab_navigates(self):
         # Search was on Google, but user navigated to another site
         self.backend.browser_context = {
@@ -161,7 +148,7 @@ class SearchContextTtlAndValidationTests(unittest.TestCase):
             'created_at': time.monotonic()
         }
         with patch.object(browser_mod, 'request', return_value={'tabId': 12, 'url': 'https://archlinux.org'}):
-            with self.assertRaisesRegex(RuntimeError, 'no longer current'):
+            with self.assertRaisesRegex(RuntimeError, 'No current search results'):
                 self.backend.require_browser_context()
             self.assertIsNone(self.backend.browser_context)
 

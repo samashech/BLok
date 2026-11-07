@@ -25,15 +25,17 @@ ROOT = Path(__file__).resolve().parent.parent
 from blok.paths import DATA
 
 
-def same_results(url, original):
-    """Is `url` still the results page at `original`? Google and YouTube add tracking params
-    (sxsrf, ei, pp, #fragment) after loading, so compare host, path and the query itself."""
+def results_page(url):
+    """(site, query) when `url` is a Google or YouTube results page, else None."""
     from urllib.parse import urlsplit, parse_qs
-    a, b = urlsplit(url), urlsplit(original)
-    if (a.netloc, a.path.rstrip('/')) != (b.netloc, b.path.rstrip('/')):
-        return False
-    qa, qb = parse_qs(a.query), parse_qs(b.query)
-    return all(qa.get(key) == qb.get(key) for key in ('q', 'search_query', 'tbm', 'udm', 'start', 'list'))
+    from blok.nlu import site_of
+    parts, site = urlsplit(url or ''), site_of(url)
+    key = {'google': ('/search', 'q'), 'youtube': ('/results', 'search_query')}.get(site)
+    if not key or parts.path.rstrip('/') != key[0]:
+        return None
+    query = parse_qs(parts.query).get(key[1])
+    return (site, query[0]) if query else None
+
 
 class Backend:
     def __init__(self):
@@ -1081,7 +1083,7 @@ class Backend:
             return
         if not browser.BROWSERS.fullmatch(active.get('class', '')):
             # A terminal or editor is in front: browser follow-ups no longer apply.
-            self.context.active_site = None
+            self.context.leave_browser()
             return
         for request in ({'action': 'active'}, {'action': 'inspect'}):
             try:
@@ -1092,6 +1094,7 @@ class Backend:
             if url:
                 self.context.update_tab(tab.get('tabId') or tab.get('tab_id'), url=url)
                 return
+        self.context.leave_browser()    # a browser we can't read: don't act on a remembered tab
 
     def download(self, task):
         """Search → open the chosen page → Laya picks the download link → approval → verified download."""
@@ -1156,8 +1159,14 @@ class Backend:
         def progress(event):
             if event.get('status') == 'running':
                 self.emit(type="activity", state="executing", message=event['message'])
-        result=browser.request(task,on_progress=progress)
-        if action in ('new_tab', 'navigate', 'search', 'play', 'next_track') and result.get('verified'):
+        try:
+            result=browser.request(task,on_progress=progress)
+        except browser.BrowserTaskError as error:
+            # The page in front can't be searched (no box, or a page extensions can't touch).
+            if task.get('fallback')=='google' and re.search(r'no search box|cannot access|cannot be scripted',str(error),re.I):
+                return 'This page has no search box. '+self.browser_task({'action':'search','site':'google','query':task['query']})
+            raise
+        if action in ('new_tab', 'navigate', 'search', 'site_search', 'play', 'next_track') and result.get('verified'):
             tab_id = result.get('tab_id') or result.get('tabId')
             url = result.get('url') or task.get('url')
             site = task.get('site')
@@ -1176,18 +1185,20 @@ class Backend:
         return result['message']
 
     def require_browser_context(self):
-        context=self.browser_context
-        if not context or time.monotonic()-context['created_at'] > 300:
+        """The results to choose from are the ones on the tab in front, whoever searched."""
+        try:
+            observation=browser.request({'action':'inspect'},on_progress=lambda event:None)
+        except RuntimeError:
+            observation={}
+        tab_id, url=observation.get('tabId'), observation.get('url') or ''
+        results=results_page(url)
+        if not (tab_id and results):
             self.browser_context=None
             self.context.clear_search_context()
-            raise RuntimeError('No current search results. Search Google or YouTube, then choose a result within five minutes.')
-        observation=browser.request({'action':'inspect'},on_progress=lambda event:None)
-        if observation.get('tabId') != context['tabId'] or not same_results(observation.get('url') or '', context['url']):
-            self.browser_context=None
-            self.context.clear_search_context()
-            raise RuntimeError('Those search results are no longer current. Search again before choosing a result.')
-        context['url']=observation['url']   # the extension checks the exact URL; Google rewrites its params
-        return {key:context[key] for key in ('tabId','url','site','query')}
+            raise RuntimeError('No current search results on this tab. Search Google or YouTube, then choose a result.')
+        context={'tabId':tab_id,'url':url,'site':results[0],'query':results[1]}
+        self.browser_context={**context,'created_at':time.monotonic()}
+        return context
 
     @staticmethod
     def has_result_followup(candidates):

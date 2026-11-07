@@ -54,7 +54,7 @@ SITES = {
 SITE_SEARCH = {
     "steam": "https://store.steampowered.com/search/?term={q}", "amazon": "https://www.amazon.in/s?k={q}",
     "reddit": "https://www.reddit.com/search/?q={q}", "github": "https://github.com/search?q={q}&type=repositories",
-    "wikipedia": "https://en.wikipedia.org/w/index.php?search={q}", "x": "https://x.com/search?q={q}",
+    "wikipedia": "https://en.wikipedia.org/w/index.php?search={q}&fulltext=1", "x": "https://x.com/search?q={q}",
     "twitch": "https://www.twitch.tv/search?term={q}", "netflix": "https://www.netflix.com/search?q={q}",
     "stack overflow": "https://stackoverflow.com/search?q={q}", "maps": "https://www.google.com/maps/search/{q}",
     "linkedin": "https://www.linkedin.com/search/results/all/?keywords={q}", "gmail": "https://mail.google.com/mail/u/0/#search/{q}",
@@ -74,7 +74,7 @@ def site_of(url: str | None) -> str | None:
     except ValueError:
         return None
     host = (parsed.hostname or "").removeprefix("www.")
-    if not host:
+    if not host or parsed.scheme not in ("http", "https"):   # brave://newtab is not a site
         return None
     if host.startswith("google.") and parsed.path.startswith("/maps"):
         return "maps"
@@ -200,11 +200,19 @@ class ConversationContext:
     def update_tab(self, tab_id: int | None, url: str | None = None, site: str | None = None):
         if tab_id is not None and tab_id != self.active_tab_id:
             self.last_active_tab_id = self.active_tab_id
+        moved = tab_id is not None and tab_id != self.active_tab_id
         self.active_tab_id = tab_id
-        if url:
+        if url or moved:
+            # A different tab with no address yet says nothing about the old tab's page.
             self.active_url = url
         # The site follows the page actually shown; "x" must not match every URL with an x.
-        self.active_site = site or site_of(url) or self.active_site
+        self.active_site = site or (site_of(url) if url or moved else self.active_site)
+
+    def leave_browser(self):
+        """No browser tab is in front (or none can be seen), so no tab may steer the next command."""
+        if self.active_tab_id is not None:
+            self.last_active_tab_id = self.active_tab_id
+        self.active_tab_id = self.active_url = self.active_site = None
 
     def set_search_context(self, tab_id: int, url: str, site: str, query: str):
         self.search_context = {
@@ -919,12 +927,21 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     # 14. General "search for <query>", "look up <query>", "find <query> online"
     m = re.fullmatch(r'(?:search(?: for| up)?|look up|find me|check out|see what\'s on|find online|look online for|search the web for|find|google search|look for) (.+?)(?: online| on the (?:web|internet))?', norm, re.I)
     if m:
-        query = re.sub(r'^(?:the|some|a) ', '', m[1].strip(), flags=re.I)
-        if context and context.active_site in SITE_SEARCH:
-            return ResolvedIntent(intent_type="search", entities={"site": context.active_site, "query": query}, confidence=0.94,
+        # The tab in front decides where a search goes, unless you asked for the web itself.
+        said_web = re.match(r'(?:the )?(?:web|internet) for (.+)', m[1], re.I)
+        query = re.sub(r'^(?:the|some|a) ', '', (said_web[1] if said_web else m[1]).strip(), flags=re.I)
+        web = said_web or re.search(r'\b(?:online|web|internet)\b', norm[:m.start(1)] + norm[m.end(1):], re.I)
+        here = None if web else (context.active_site if context else None)
+        if here in SITE_SEARCH:
+            return ResolvedIntent(intent_type="search", entities={"site": here, "query": query}, confidence=0.94,
                                   raw_text=raw, normalized_text=norm, action_kind="url",
-                                  action_value=SITE_SEARCH[context.active_site].format(q=quote_plus(query)))
-        site = context.active_site if (context and context.active_site in ('google', 'youtube', 'spotify')) else "google"
+                                  action_value=SITE_SEARCH[here].format(q=quote_plus(query)))
+        if here and here not in ('google', 'youtube', 'spotify') and str(context.active_url or '').startswith(('http://', 'https://')):
+            # Any other website: its own search box, or Google if it has none.
+            task = {"action": "site_search", "query": query, "fallback": "google"}
+            return ResolvedIntent(intent_type="search", entities=task, confidence=0.94, raw_text=raw, normalized_text=norm,
+                                  action_kind="web_task", action_value=json.dumps(task))
+        site = here if here in ('google', 'youtube', 'spotify') else "google"
         task = {"action": "search", "site": site, "query": query}
         if context and context.active_tab_id:
             task["target_tab_id"] = context.active_tab_id

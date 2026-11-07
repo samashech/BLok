@@ -11,7 +11,7 @@ from urllib.parse import quote_plus
 
 from blok.commands import Action, START, parse, SITES
 from blok.workflows import workflow
-from blok.nlu import split_compound_utterance, resolve_intent, ConversationContext
+from blok.nlu import split_compound_utterance, resolve_intent, ConversationContext, site_of
 
 # File, window and download verbs are handled by bounded tools (blok/router.py)
 # with approval cards. System-level and outbound actions stay unsupported.
@@ -55,7 +55,7 @@ def assess_step_risk(kind_or_action: Any, value: str | None = None, confidence: 
             target = str(task.get("target", ""))
             if SENSITIVE_WORDS.search(target) or SENSITIVE_WORDS.search(action):
                 return "SENSITIVE_DESTRUCTIVE", True, f"Sensitive browser action: {target or action}"
-            if action in ("new_tab", "navigate", "search"):
+            if action in ("new_tab", "navigate", "search", "site_search"):
                 return "SAFE_NAVIGATE", False, ""
             if action in ("play", "next_track"):
                 return "STATE_MUTATING", False, ""
@@ -407,10 +407,7 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
                 active_context.active_app = action.value
             elif action.kind == 'url':
                 active_context.active_url = action.value
-                for s in SITES:
-                    if s in action.value:
-                        active_context.active_site = s
-                        break
+                active_context.active_site = site_of(action.value)
         elif action.kind == 'web_task':
             try:
                 t_obj = json.loads(action.value)

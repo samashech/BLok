@@ -4,6 +4,7 @@ from unittest.mock import patch, Mock
 
 from blok import browser
 from blok.backend import Backend
+from blok.commands import Action
 from blok.nlu import ConversationContext, resolve_intent, site_of
 
 
@@ -38,6 +39,48 @@ class FollowUpTests(unittest.TestCase):
         self.assertEqual(self.task('search steam for phantom blade')[1], 'https://store.steampowered.com/search/?term=phantom+blade')
         self.assertEqual(self.task('search for weather')[1]['site'], 'google')
 
+    def test_any_other_website_uses_its_own_search_box(self):
+        kind, task = self.task('search for games', self.on('https://example-shop.in/toys'))
+        self.assertEqual((kind, task), ('web_task', {'action': 'site_search', 'query': 'games', 'fallback': 'google'}))
+
+    def test_a_new_tab_has_no_site_and_searches_google(self):
+        tab = self.on('https://www.youtube.com/')
+        tab.update_tab(8, url='brave://newtab/')
+        self.assertIsNone(tab.active_site)
+        self.assertEqual(self.task('search for games', tab)[1]['site'], 'google')
+
+    def test_a_new_tab_without_an_address_forgets_the_old_site(self):
+        tab = self.on('https://www.youtube.com/')
+        tab.update_tab(8)
+        self.assertEqual((tab.active_site, tab.active_url), (None, None))
+        self.assertEqual(self.task('search for games', tab)[1]['site'], 'google')
+
+    def test_same_tab_update_without_an_address_keeps_the_page(self):
+        tab = self.on('https://www.youtube.com/')
+        tab.update_tab(tab.active_tab_id)
+        self.assertEqual(tab.active_site, 'youtube')
+
+    def test_switching_tabs_changes_where_a_search_goes(self):
+        tab = self.on('https://www.youtube.com/')
+        self.assertEqual(self.task('search for games', tab)[1]['site'], 'youtube')
+        tab.update_tab(9, url='https://github.com/')
+        self.assertEqual(self.task('search for games', tab)[1], 'https://github.com/search?q=games&type=repositories')
+
+    def test_asking_for_the_web_means_google_on_any_tab(self):
+        for said in ('search the web for games', 'search for games online', 'find games on the internet'):
+            for page in ('https://www.youtube.com/', 'https://store.steampowered.com/', 'https://example-shop.in/'):
+                task = self.task(said, self.on(page))[1]
+                self.assertEqual((task['site'], task['query']), ('google', 'games'), (said, page))
+
+    def test_online_in_the_query_itself_still_follows_the_tab(self):
+        self.assertEqual(self.task('search for online games', self.on('https://www.youtube.com/'))[1]['site'], 'youtube')
+
+    def test_leaving_the_browser_forgets_the_tab(self):
+        tab = self.on('https://www.youtube.com/')
+        tab.leave_browser()
+        self.assertEqual((tab.active_tab_id, tab.active_site, tab.active_url), (None, None, None))
+        self.assertEqual(self.task('search for games', tab)[1], {'action': 'search', 'site': 'google', 'query': 'games'})
+
     def test_click_that_button_points(self):
         self.assertEqual(self.task('click that button')[1]['pointer'], True)
         self.assertEqual(self.task('hit this')[1]['pointer'], True)
@@ -69,6 +112,25 @@ class BackendFollowUpTests(unittest.TestCase):
         with patch.object(browser, 'run', return_value=json.dumps({'class': 'foot'})):
             self.backend.refresh_page_context()
         self.assertIsNone(self.backend.context.active_site)
+
+    def test_unreadable_browser_or_other_app_leaves_no_tab_behind(self):
+        self.backend.context.update_tab(4, url='https://www.youtube.com/')
+        with patch.object(browser, 'run', return_value=json.dumps({'class': 'brave-origin'})), \
+             patch.object(browser, 'request', side_effect=RuntimeError('disconnected')):
+            self.backend.refresh_page_context()
+        self.assertEqual((self.backend.context.active_tab_id, self.backend.context.active_site), (None, None))
+        self.backend.context.update_tab(4, url='https://www.youtube.com/')
+        with patch.object(browser, 'run', return_value=json.dumps({'class': 'foot'})):
+            self.backend.refresh_page_context()
+        self.assertEqual((self.backend.context.active_tab_id, self.backend.context.active_url), (None, None))
+
+    def test_site_search_runs_on_the_tab_in_front(self):
+        action = Action('web_task', json.dumps({'action': 'site_search', 'query': 'games', 'fallback': 'google'}))
+        with patch.object(browser, 'request', return_value={'message': 'Searched example-shop.in for games', 'verified': True,
+                                                            'tabId': 7, 'url': 'https://example-shop.in/s?q=games'}) as request:
+            self.backend.execute(action)
+        self.assertEqual(request.call_args.args[0]['action'], 'site_search')
+        self.assertEqual(self.backend.context.active_url, 'https://example-shop.in/s?q=games')
 
     def test_pointer_click_confirms_risky_labels(self):
         calls = []
