@@ -1,4 +1,4 @@
-import {pageAction} from './page.js';
+import {pageAction,gameFrameText} from './page.js';
 import {execution} from './execution.js';
 // Only the native connection is global. Cancellation survives worker restarts.
 let port;
@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase13-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase14-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -172,9 +172,13 @@ export async function run(req, progress=()=>{}) {
       const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
       return confirmed('Pointing at '+found.name,'Control under the mouse observed',{...found,tabId:tab.id});
     }
-    if(task.action==='page_text') {
-      if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
-      return {...await page({op:'page_text'}),tabId:tab.id};
+    if(task.action==='game_text') {
+      if(!tab||!/^https?:/.test(tab.url))return {found:false};
+      const frames=await chrome.scripting.executeScript({target:{tabId:tab.id,allFrames:true},func:gameFrameText,args:[task.hosts||[]]}).catch(()=>[]);
+      const answers=frames.map(f=>f.result).filter(Boolean);
+      // A page can hold the game and something else from the same site: the frame with a score wins.
+      const best=answers.find(a=>/Score:|Your length|Game over|final length/i.test(a.text))||answers[0];
+      return best?{found:true,...best}:{found:false};
     }
     if(task.action==='snapshot') {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');

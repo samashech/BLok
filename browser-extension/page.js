@@ -1,4 +1,11 @@
 // Executed in Chrome's isolated world. Page text is data, never executable input.
+// Run in every frame of a tab: only a frame from one of these games answers, with the words showing in it.
+// Games are often embedded in another site, and the other frames of those sites are mostly ads.
+export function gameFrameText(hosts) {
+  const host=location.hostname.replace(/^www\./,'');
+  if(!hosts.includes(host)||!document.body)return null;
+  return {url:location.href,text:document.body.innerText.slice(0,6000)};
+}
 export async function pageAction(request, captureErrors=false) {
   try {
   const visible = e => {
@@ -94,10 +101,6 @@ export async function pageAction(request, captureErrors=false) {
     const result={url:location.href,title:document.title,page:page(),controls};
     if(request.target) result.control=descriptor(findTarget(request));
     return result;
-  }
-  if(request.op==='page_text') {
-    // Only the words showing on the page. Nothing on it is changed.
-    return {url:location.href,title:document.title,text:document.body.innerText.slice(0,6000)};
   }
   if(request.op==='snapshot') {
     // One compact entry per control, what's on screen first. Field contents are never read.

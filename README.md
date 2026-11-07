@@ -88,7 +88,7 @@ Layouts live in `~/.config/blok/layouts/` as plain JSON you can edit. Focus mode
 
 ## Watching you play
 
-Open [slither.io](https://slither.io), say “start commentary”, and play. BLoK reacts to big meals, milestones, your rank, personal records and every death, and otherwise leaves you alone. It reads your length, rank and the leaderboard from the page about once a second. It never touches the game or sends it anything, and it doesn't play for you.
+Open [slither.io](https://slither.io) or [slithergame.io](https://slithergame.io), full screen is fine, say “start commentary”, and play. BLoK reacts to big meals, milestones, your rank, personal records and every death, and otherwise leaves you alone. It reads your score, rank and the leaderboard from the page about once a second, including when the game is embedded in another site. It never touches the game or sends it anything, and it doesn't play for you.
 
 | Say | What happens |
 |---|---|
@@ -98,7 +98,7 @@ Open [slither.io](https://slither.io), say “start commentary”, and play. BLo
 | “what's my high score” · “how many times did I die” · “what's my rank” | Answers from what it recorded |
 | “stop commentary” · “game over” | Stops, and sums up the session |
 
-Everything it sees goes in a timeline on this computer (`data/games/slither.jsonl`), so it remembers your record and past games after a restart. It only knows what the numbers show: it can tell you died, but not who got you. This needs the browser extension updated to `phase13`: reload it in `brave://extensions`, then reload the game's page.
+Everything it sees goes in a timeline on this computer (`data/games/slither.jsonl`), so it remembers your record and past games after a restart. It only knows what the numbers show: it can tell you died, but not who got you. If it can't find a score, it says so. This needs the browser extension updated to `phase14`: reload it in `brave://extensions`, then reload the game's page.
 
 ## Talking to it
 

@@ -1,9 +1,10 @@
 """BLoK watches you play, comments, and remembers what happened. It never touches the game.
 
-Right now that means slither.io, which shows your length, rank and the leaderboard as plain
-page text, so BLoK reads exact numbers about once a second through the browser extension.
-Nothing is sent to the game and no input is made. Everything that happens goes into a local
-timeline (data/games/slither.jsonl), so you can ask about it later, even after a restart.
+slither.io and gulper.io (the game inside slithergame.io) show your score, rank and the
+leaderboard as plain page text, so BLoK reads exact numbers about once a second through the
+browser extension, even when the game is embedded in another site. Nothing is sent to the
+game and no input is made. Everything that happens goes into a local timeline
+(data/games/slither.jsonl), so you can ask about it later, even after a restart.
 """
 from dataclasses import dataclass, field
 import json
@@ -19,17 +20,29 @@ QUIET_SECONDS = 7       # at least this long between remarks, unless it's import
 BANTER_SECONDS = 50     # say something if nothing has happened for this long
 
 
+GAME_HOSTS = ['slither.io', 'gulper.io']
+CANT_SEE_AFTER = 30     # seconds of finding no score before saying so
+
+
 def is_game_page(url: str) -> bool:
-    return bool(re.match(r'https?://(?:www\.)?slither\.io(?:[/?#]|$)', url or ''))
+    return bool(re.match(r'https?://(?:www\.)?(?:' + '|'.join(map(re.escape, GAME_HOSTS)) + r')(?:[/?#:]|$)', url or ''))
 
 
 def read_state(text: str) -> dict:
     """What the page says right now. Page text is only searched for numbers, never obeyed."""
     text = (text or '').replace('\xa0', ' ')
-    state = {'playing': False, 'length': None, 'rank': None, 'players': None, 'final': None, 'top': None}
-    length = re.search(r'Your length:\s*([\d,]+)', text)
-    rank = re.search(r'Your rank:\s*([\d,]+)\s*of\s*([\d,]+)', text)
-    final = re.search(r'final length (?:was\s*)?([\d,]+)', text, re.I)
+    state = {'playing': False, 'length': None, 'rank': None, 'players': None, 'final': None, 'top': None, 'survived': None, 'top_rank': None}
+    over = re.search(r'Final score:\s*([\d,]+)', text, re.I)      # gulper.io's game over screen stays until you choose
+    length = None if over else re.search(r'(?:Your length|Score):\s*([\d,]+)', text)
+    rank = None if over else re.search(r'(?:Your rank|Rank):\s*([\d,]+)\s*of\s*([\d,]+)', text)
+    final = over or re.search(r'final length (?:was\s*)?([\d,]+)', text, re.I)
+    survived = re.search(r'Survived for:\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?', text)
+    if over and survived and any(survived.groups()):
+        hours, minutes, seconds = (int(part or 0) for part in survived.groups())
+        state['survived'] = hours * 3600 + minutes * 60 + seconds
+    top_rank = re.search(r'Top rank:\s*(\d+)', text)
+    if over and top_rank:
+        state['top_rank'] = int(top_rank[1])
     if length:
         state['playing'] = True
         state['length'] = int(length[1].replace(',', ''))
@@ -41,6 +54,10 @@ def read_state(text: str) -> dict:
     if board:
         scores = [int(n.replace(',', '')) for n in re.findall(r'[\d,]+', board[1])]
         state['top'] = scores[0] if scores else None
+    else:
+        first = re.search(r'^1\.\s.*\n\s*([\d,]+)\s*$', text, re.M)      # gulper.io: "1. name" then the score
+        if first:
+            state['top'] = int(first[1].replace(',', ''))
     return state
 
 
@@ -101,10 +118,12 @@ class Session:
                 events.append(Event('new_best', now, {'length': length, 'old': self.best_before}, important=True))
             self.best = length
         if rank is not None:
+            players = state.get('players') or 0
             for mark in RANK_MARKS:
                 if rank <= mark and mark not in life['ranks']:
                     life['ranks'].add(mark)
-                    if life['started'] != now:
+                    # Top 10 of 14 players means nothing: a mark must be in the top half of the server.
+                    if life['started'] != now and (mark == 1 or mark * 2 <= players):
                         events.append(Event('rank_mark', now, {'mark': mark, 'rank': rank, 'players': state.get('players')}, important=mark <= 10))
             if life['best_rank'] is None or rank < life['best_rank']:
                 life['best_rank'] = rank
@@ -117,8 +136,9 @@ class Session:
         life, self.life = self.life, None
         final = state.get('final') or life['length']
         self.best = max(self.best, final)
-        record = {'number': len(self.lives) + 1, 'final': final, 'peak': max(life['peak'], final), 'best_rank': life['best_rank'],
-                  'seconds': round(now - life['started']), 'players': life['players']}
+        ranks = [r for r in (life['best_rank'], state.get('top_rank')) if r]
+        record = {'number': len(self.lives) + 1, 'final': final, 'peak': max(life['peak'], final), 'best_rank': min(ranks) if ranks else None,
+                  'seconds': state.get('survived') or round(now - life['started']), 'players': life['players']}
         self.lives.append(record)
         return [Event('death', now, {**record, 'best': self.best, 'was_best': final >= self.best and final > self.best_before}, important=True)]
 
@@ -136,7 +156,9 @@ def _(*options):
 LINES = {
     'watching': (_('Okay {name}, I\'m watching. Commentary is on. Show me what this snake can do.', 'Commentary on! Eat well and try not to hit anyone.'),
                  _('ठीक है {name}, मैं देख रहा हूँ। कमेंट्री चालू है। दिखाइए इस साँप का दम।', 'कमेंट्री चालू! ख़ूब खाइए, और किसी से टकराइए मत।')),
-    'waiting': (_('Commentary is on. Open slither dot io and hit play, I\'ll be watching.',), _('कमेंट्री चालू है। स्लिदर खोलकर प्ले दबाइए, मैं देख रहा हूँ।',)),
+    'waiting': (_('Commentary is on. Open your snake game and hit play, I\'ll be watching.',), _('कमेंट्री चालू है। साँप वाला गेम खोलकर प्ले दबाइए, मैं देख रहा हूँ।',)),
+    'cant_see': (_('I\'m watching, but I can\'t see a score yet. I can read slither dot io and slither game dot io, and the game has to be on the tab in front.',),
+                 _('मैं देख रहा हूँ, पर अभी स्कोर नहीं दिख रहा। गेम सामने वाले टैब में होना चाहिए।',)),
     'life_start': (_('And we\'re off! Tiny snake, big dreams.', 'Fresh snake, fresh start. Everyone out there is food.', 'Here we go again. This is the one, I can feel it.'),
                    _('शुरू! छोटा साँप, बड़े सपने।', 'नया साँप, नई शुरुआत। बाहर सब खाना है।', 'चलिए फिर से। इस बार पक्का।')),
     'big_jump': (_('Whoa, plus {gained}! Somebody just became dinner.', 'Huge meal! That\'s {gained} in one go.', 'Delicious. {gained} bigger, just like that.'),
@@ -282,7 +304,7 @@ STOP = re.compile(r"(?:stop|end|turn off|finish)(?: the| game| my)* commentary|c
                   r"commentary (?:band|bandh|rok) (?:karo|kar do|kar)|(?:game|khel) (?:khatam|band)(?: karo| ho gaya)?", re.I)
 MUTE = re.compile(r"(?:be )?quiet(?: for a (?:bit|while|minute))?|shut up|hush|stop talking|chup(?: raho| ho ja| ho jao| kar| karo)?|mat bolo|bolna band karo|silence", re.I)
 UNMUTE = re.compile(r"(?:you can )?(?:talk|speak)(?: again)?|keep talking|commentate again|start talking|resume commentary|bolo|ab bolo|phir se bolo|bol sakte ho", re.I)
-ASK_SUMMARY = re.compile(r"what happened|how (?:did|am|'?m) i (?:do|doing)|how(?:'s| is) (?:it|the game) going|how (?:was|did)(?: my| the)? (?:last )?game(?: go)?|(?:give me a |game )?summary|"
+ASK_SUMMARY = re.compile(r"what(?:'s| is) (?:happening|going on)(?: in (?:the|my) game)?|tell me about (?:the|my) game|what happened|how (?:did|am|'?m) i (?:do|doing)|how(?:'s| is) (?:it|the game) going|how (?:was|did)(?: my| the)? (?:last )?game(?: go)?|(?:give me a |game )?summary|"
                          r"what happened (?:in|during)(?: my| the)?(?: last)? (?:game|match)|recap|(?:kya hua|kaisa chal raha hai|kaisa khel raha hoon|game kaisa raha|pichle game mein kya hua)", re.I)
 ASK_BEST = re.compile(r"what(?:'s| is| was) my (?:best|high) ?(?:score|length|game)?(?: ever)?|what(?:'s| is) my record|my (?:high score|best score)|mera (?:best|record|sabse accha)(?: score)?(?: kya hai)?", re.I)
 ASK_DEATHS = re.compile(r"how many (?:times )?(?:did|have) i (?:die|died)(?: so far)?|how many (?:deaths|lives|games)(?: so far)?|kitni baar (?:mara|mari|mar gaya|mar gayi)(?: hoon)?", re.I)
@@ -306,7 +328,7 @@ def answer_summary(memory: Memory, session: Session | None, hindi: bool) -> str:
     deaths = [e for e in memory.last_session() if e.get('kind') == 'death']
     alive = session.life if session else None
     if not deaths and not alive:
-        return line('no_memory', hindi)
+        return line('cant_see' if session else 'no_memory', hindi)   # watching and seeing nothing isn't "no memory"
     parts = []
     if deaths:
         best = max(deaths, key=lambda d: d.get('peak', 0))
@@ -331,7 +353,7 @@ def answer(kind: str, memory: Memory, session: Session | None, hindi: bool, now:
     if kind == 'best':
         best = max(memory.best(), session.best if session else 0)
         if not best:
-            return line('no_memory', hindi)
+            return line('cant_see' if session else 'no_memory', hindi)
         return f'आपका सबसे अच्छा {best} है।' if hindi else f'Your best ever is {best}.'
     if kind == 'deaths':
         count = len([e for e in memory.last_session() if e.get('kind') == 'death'])
@@ -341,6 +363,8 @@ def answer(kind: str, memory: Memory, session: Session | None, hindi: bool, now:
         return f'{count} this session, {total} all time.' + (' Very brave.' if total > 5 else '')
     if kind == 'now':
         life = session.life if session else None
+        if session and not life and not session.lives:
+            return line('cant_see', hindi)
         if not life:
             return 'अभी आप खेल नहीं रहे।' if hindi else 'You\'re not in a game right now.'
         if hindi:

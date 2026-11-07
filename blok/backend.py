@@ -410,6 +410,8 @@ class Backend:
         watching = getattr(self, 'game_watch', None)
         if kind is None or (kind in ('mute', 'unmute', 'stop') and not watching):
             return False
+        if kind == 'summary' and not watching and not re.search(r'\b(?:game|match|khel)\b', text, re.I):
+            return False        # "what happened" with no game on is just a question
         hindi = self.game_language(spoke_hindi)
         self.reply_hinglish = hindi
         if kind == 'start':
@@ -439,7 +441,7 @@ class Backend:
         if getattr(self, 'game_watch', None):
             self.speak_game(game.line('watching', hindi, name=self.user_name(), name_hi=self.user_name_hindi()))
             return
-        self.require_extension('Game commentary', 'phase13-v1')
+        self.require_extension('Game commentary', 'phase14-v1')
         now = time.monotonic()
         memory = self.game_memory()
         watch = {'session': game.Session(best=memory.best(), now=now), 'commentator': game.Commentator(now), 'stop': threading.Event(), 'memory': memory}
@@ -452,9 +454,10 @@ class Backend:
     def game_tab_in_front(self):
         from blok import game
         try:
-            return game.is_game_page(browser.request({'action': 'active'}, timeout=1).get('url'))
+            seen = browser.request({'action': 'game_text', 'hosts': game.GAME_HOSTS}, timeout=2)
         except RuntimeError:
             return False
+        return bool(seen.get('found')) and game.is_game_page(seen.get('url'))
 
     def stop_game_watch(self, hindi):
         from blok import game
@@ -475,14 +478,20 @@ class Backend:
         Switching to another tab or app just pauses it. That isn't a death.
         """
         from blok import game
+        started, warned, seen_game = time.monotonic(), False, False
         while not watch['stop'].wait(1.0):
             try:
-                seen = browser.request({'action': 'page_text'}, timeout=2)
+                seen = browser.request({'action': 'game_text', 'hosts': game.GAME_HOSTS}, timeout=2)
             except RuntimeError:
-                continue
-            if not game.is_game_page(seen.get('url')):
-                continue
-            self.game_tick(watch, game.read_state(seen.get('text')), time.monotonic())
+                seen = {}
+            if seen.get('found') and game.is_game_page(seen.get('url')):
+                state = game.read_state(seen.get('text'))
+                seen_game = seen_game or state['playing'] or state['final'] is not None
+                self.game_tick(watch, state, time.monotonic())
+            elif not seen_game and not warned and time.monotonic() - started >= game.CANT_SEE_AFTER:
+                warned = True           # say it once, rather than sitting there silently recording nothing
+                if not watch['commentator'].muted:
+                    self.speaker.say(game.line('cant_see', self.game_language()))
 
     def game_tick(self, watch, state, now):
         from blok import game
@@ -1039,7 +1048,7 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1', 'phase13-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1', 'phase13-v1', 'phase14-v1')
 
     def browser_in_front(self):
         try:

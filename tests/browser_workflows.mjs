@@ -1,7 +1,7 @@
 import {readFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 const noop={addListener(){}};
-const listeners={tab:null,download:null};let clickEffect=null;
+const listeners={tab:null,download:null};let clickEffect=null;let gameFrames=[];
 let state,events,cancelSearch=false,playError=false,wrongPlayback=false;
 const tabs=new Map();
 function reset(url='https://www.youtube.com/'){
@@ -12,7 +12,8 @@ globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v
  async update(id,changes){events.push(['update',changes]);if(changes.active)for(const tab of tabs.values())if(tab.windowId===tabs.get(id).windowId)tab.active=false;Object.assign(tabs.get(id),changes);return {...tabs.get(id)};},
  async create(changes){events.push(['create',changes]);if(changes.active)for(const tab of tabs.values())if(tab.windowId===1)tab.active=false;const t={id:tabs.size+1,windowId:1,url:'brave://newtab/',status:'complete',...changes};tabs.set(t.id,t);return {...t,url:undefined};}},
  windows:{async update(){}},downloads:{onCreated:{addListener(f){listeners.download=f;},removeListener(){listeners.download=null;}}},scripting:{async executeScript({target,args:[req]}){
-  events.push(['op',req.op,!!req.prepareOnly]);const tab=tabs.get(target.tabId);let result;
+  if(target.allFrames){events.push(['allFrames']);return gameFrames;}
+    events.push(['op',req.op,!!req.prepareOnly]);const tab=tabs.get(target.tabId);let result;
   if(req.prepareOnly)return [{result:true}];
   if(req.op==='inspect')result={url:tab.url,title:'Fixture',page:'fixture-page',controls:[{name:req.target||'Save',role:'button',editable:false,disabled:false}],control:req.target?{id:'control-1',name:req.target,role:'button',editable:false,disabled:false,fingerprint:'button|save|button||'}:undefined};
   else if(req.op==='search'){
@@ -34,7 +35,7 @@ globalThis.chrome={storage:{session:{async get(){return {...state};},async set(v
   return [{result}];
  }},runtime:{onStartup:noop,onInstalled:noop,onMessage:noop},alarms:{onAlarm:noop},action:{onClicked:noop}};
 let source=await readFile(new URL('../browser-extension/background.js',import.meta.url),'utf8');
-source=source.replace("import {pageAction} from './page.js';",'const pageAction=()=>{};').replace(/connect\(\);\s*$/,'');
+source=source.replace("import {pageAction,gameFrameText} from './page.js';",'const pageAction=()=>{},gameFrameText=()=>{};').replace(/connect\(\);\s*$/,'');
 source=source.replace("'./execution.js'",JSON.stringify(new URL('../browser-extension/execution.js',import.meta.url).href));
 const {run}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 reset('brave://extensions/');
@@ -100,4 +101,15 @@ console.log('PASS: uncertain actions are not repeated; unverified steps stop; wr
  clickEffect=null;
  assert.equal(listeners.tab,null);assert.equal(listeners.download,null);
  console.log('PASS: snapshot action and click effects');
+}
+{
+ reset('https://slithergame.io/');
+ gameFrames=[{result:null},{result:{url:'https://gulper.io/home',text:'About the game'}},{result:{url:'https://gulper.io/',text:'Score: 10\nRank: 2 of 14'}}];
+ const seen=await run({action:'game_text',hosts:['gulper.io']});
+ assert.equal(seen.found,true);assert.match(seen.text,/Score: 10/);          // the frame with a score wins
+ gameFrames=[{result:null},{result:null}];
+ assert.equal((await run({action:'game_text',hosts:['gulper.io']})).found,false);
+ reset('brave://newtab/');
+ assert.equal((await run({action:'game_text',hosts:['gulper.io']})).found,false);
+ console.log('PASS: game text comes from the game frame only');
 }

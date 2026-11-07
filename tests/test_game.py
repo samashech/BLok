@@ -17,6 +17,12 @@ HOME = '\xa0\nEat to grow longer!\n\xa0Play\xa0\nprivacy - terms of service - co
 DEAD = 'Your final length was 51\n\xa0Play Again\xa0\nprivacy - terms of service - contact'
 
 
+# Real text from gulper.io, the game inside slithergame.io, including a real death.
+GULPER = '1. qqq\t\n30525\n\n2. RAP\t\n11392\n\n3. AYAN\t\n2031\n\n4. Play\t\n1554\n\n9. Guest470\t\n93\n\n12. Guest375\t\n10\nFPS: 60/60\nPing: 78~14\nScore: 10\nRank: 10 of 14'
+GULPER_OVER = 'Copy invite link\nGame over...\nFinal score: 35\nTop rank: 10\nSurvived for: 6s\nMain Menu Play Again'
+GULPER_HOME = 'Play\nHold left mouse button or Space to accelerate\n© 2026 gulper.io•About•Privacy•v1.5.1b\nAbout the game\nWelcome to gulper.io, a fast-paced game'
+
+
 def at(length, rank=200, players=300):
     return {'playing': True, 'length': length, 'rank': rank, 'players': players, 'final': None, 'top': 20000}
 
@@ -42,10 +48,30 @@ class ReadTests(unittest.TestCase):
         for text in ('', None, 'Your length: lots', 'hello'):
             self.assertFalse(read_state(text)['playing'], text)
 
+    def test_reads_the_game_inside_slithergame(self):
+        state = read_state(GULPER)
+        self.assertEqual((state['playing'], state['length'], state['rank'], state['players'], state['top']), (True, 10, 10, 14, 30525))
+
+    def test_reads_a_real_death(self):
+        state = read_state(GULPER_OVER)
+        self.assertEqual((state['playing'], state['final'], state['survived'], state['top_rank']), (False, 35, 6, 10))
+        self.assertEqual(read_state('Final score: 900\nSurvived for: 2m 5s')['survived'], 125)
+        self.assertFalse(read_state(GULPER_HOME)['playing'])
+
+    def test_a_real_game_from_start_to_death(self):
+        session = Session(now=0.0)
+        self.assertEqual(kinds(session.feed(read_state(GULPER_HOME), 0)), [])
+        self.assertEqual(kinds(session.feed(read_state(GULPER), 1)), ['life_start'])
+        died = session.feed(read_state(GULPER_OVER), 40)
+        self.assertEqual(kinds(died), ['death'])
+        self.assertEqual((died[0].data['final'], died[0].data['seconds'], died[0].data['best_rank']), (35, 6, 10))
+        self.assertEqual(session.feed(read_state(GULPER_OVER), 41), [])    # the screen stays up: one death
+        self.assertEqual(kinds(session.feed(read_state(GULPER), 50)), ['life_start'])    # Play Again
+
     def test_only_the_real_site_counts(self):
-        for url in ('https://slither.io/', 'http://slither.io/?a', 'https://www.slither.io'):
+        for url in ('https://slither.io/', 'http://slither.io/?a', 'https://www.slither.io', 'https://gulper.io/'):
             self.assertTrue(game.is_game_page(url), url)
-        for url in ('https://notslither.io/', 'https://slither.io.evil.test/', 'https://example.com/slither.io', '', None):
+        for url in ('https://notslither.io/', 'https://slither.io.evil.test/', 'https://example.com/slither.io', 'https://gulper.io.evil.test/', '', None):
             self.assertFalse(game.is_game_page(url), url)
 
 
@@ -124,6 +150,15 @@ class SessionTests(unittest.TestCase):
         self.assertEqual([e.data['mark'] for e in events if e.kind == 'rank_mark'], [100, 50])
         self.assertEqual([e.data['mark'] for e in session.feed(at(30, rank=1), 20) if e.kind == 'rank_mark'], [25, 10, 5, 3, 2, 1])
         self.assertEqual(session.life['best_rank'], 1)
+
+    def test_rank_marks_mean_nothing_on_a_tiny_server(self):
+        session = Session()
+        session.feed(at(10, rank=14, players=14), 0)
+        marks = [e.data['mark'] for e in session.feed(at(20, rank=7, players=14), 10) if e.kind == 'rank_mark']
+        self.assertEqual(marks, [])       # not "top 10" of 14
+        marks = [e.data['mark'] for e in session.feed(at(30, rank=5, players=14), 20) if e.kind == 'rank_mark']
+        self.assertEqual(marks, [5])
+        self.assertEqual([e.data['mark'] for e in session.feed(at(40, rank=1, players=14), 30) if e.kind == 'rank_mark'], [3, 2, 1])
 
     def test_summary(self):
         session = Session()
@@ -204,7 +239,7 @@ class UnderstandTests(unittest.TestCase):
     def test_commands(self):
         for said, kind in (('start commentary', 'start'), ('hey block, commentate on my game', 'start'), ('watch me play', 'start'), ("let's play slither", 'start'), ('commentary shuru karo', 'start'),
                            ('stop commentary', 'stop'), ('game over', 'stop'), ('commentary band karo', 'stop'), ('be quiet', 'mute'), ('shut up', 'mute'), ('chup raho', 'mute'),
-                           ('you can talk again', 'unmute'), ('what happened', 'summary'), ('what happened in my last game', 'summary'), ('how am i doing', 'summary'), ('kya hua', 'summary'),
+                           ('you can talk again', 'unmute'), ('what happened', 'summary'), ("what's happening", 'summary'), ('tell me about the game', 'summary'), ('what happened in my last game', 'summary'), ('how am i doing', 'summary'), ('kya hua', 'summary'),
                            ("what's my high score", 'best'), ('mera record kya hai', 'best'), ('how many times did i die', 'deaths'), ('kitni baar mara', 'deaths'),
                            ("what's my rank", 'now'), ('how long have i been playing', 'time'), ('who killed me', 'killer')):
             self.assertEqual(game.understand(said)[0], kind, said)
@@ -232,6 +267,13 @@ class MemoryTests(unittest.TestCase):
         again = Memory(self.memory.path)
         self.assertEqual(again.best(), 120)
         self.assertEqual(len(again.deaths()), 1)
+
+    def test_watching_but_seeing_nothing_says_that_not_no_memory(self):
+        for kind in ('summary', 'best', 'now'):
+            said = game.answer(kind, self.memory, Session(), False, 0)
+            self.assertIn("can't see a score", said, kind)
+            self.assertNotIn('any games', said)
+            self.assertFalse(LATIN.search(game.answer(kind, self.memory, Session(), True, 0)))
 
     def test_empty_memory_says_so(self):
         self.assertEqual(self.memory.best(), 0)
@@ -264,7 +306,10 @@ class MemoryTests(unittest.TestCase):
 
     def test_it_admits_what_it_cant_know(self):
         self.assertIn("can't see", game.answer('killer', self.memory, None, False, 0))
-        self.assertIn('not in a game', game.answer('now', self.memory, Session(), False, 0))
+        between_games = Session()
+        between_games.feed(at(50), 0)
+        between_games.feed(GONE, 10)
+        self.assertIn('not in a game', game.answer('now', self.memory, between_games, False, 0))
 
 
 class BackendTests(unittest.TestCase):
@@ -349,6 +394,21 @@ class BackendTests(unittest.TestCase):
         self.assertFalse(self.backend.game_command('be quiet'))
         self.assertFalse(self.backend.game_command('stop commentary'))
 
+    def test_it_says_so_once_if_it_never_finds_a_score(self):
+        watch = {'session': Session(), 'commentator': Commentator(), 'stop': threading.Event(), 'memory': self.backend.game_memory()}
+        rounds = iter(range(4))
+        watch['stop'].wait = lambda timeout: next(rounds, None) is None
+        clock = iter([0.0, 40.0, 41.0, 42.0, 43.0, 44.0])
+        with patch.object(browser, 'request', return_value={'found': False}), patch.object(backend_module.time, 'monotonic', side_effect=lambda: next(clock)):
+            self.backend.watch_game(watch)
+        self.assertEqual(self.backend.speaker.say.call_count, 1)
+        self.assertIn("can't see a score", self.backend.speaker.say.call_args.args[0])
+
+    def test_what_happened_with_no_game_on_is_just_a_question(self):
+        self.assertFalse(self.backend.game_command('what happened'))
+        self.backend.game_memory().add('session_start')
+        self.assertTrue(self.backend.game_command('what happened in my last game'))
+
     def test_answers_work_after_a_restart_with_no_game_running(self):
         self.backend.game_memory().add('death', {'final': 100, 'peak': 450, 'seconds': 90, 'best_rank': 40})
         self.backend.transcript("what's my high score", True, source='voice')
@@ -372,9 +432,9 @@ class BackendTests(unittest.TestCase):
         def request(payload, **_):
             calls.append(payload['action'])
             if len(calls) == 1:
-                return {'url': 'https://youtube.com/', 'text': 'Your length: 999'}
+                return {'found': True, 'url': 'https://youtube.com/', 'text': 'Your length: 999'}
             if len(calls) == 2:
-                return {'url': 'https://slither.io/', 'text': PLAYING}
+                return {'found': True, 'url': 'https://slither.io/', 'text': PLAYING}
             watch['stop'].set()
             raise RuntimeError('gone')
         watch = {'session': Session(), 'commentator': Commentator(), 'stop': threading.Event(), 'memory': self.backend.game_memory()}
@@ -382,7 +442,7 @@ class BackendTests(unittest.TestCase):
             original = watch['stop'].wait
             watch['stop'].wait = lambda timeout: watch['stop'].is_set()
             self.backend.watch_game(watch)
-        self.assertEqual(set(calls), {'page_text'})
+        self.assertEqual(set(calls), {'game_text'})
         self.assertEqual(watch['session'].life['length'], 23)   # only the game's page counted
 
 
