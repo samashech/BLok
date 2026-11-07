@@ -9,7 +9,7 @@ repo. The app itself was not taken apart.
 | # | Idea | Status |
 |---|------|--------|
 | 1 | Compact page snapshots with reference IDs | Live |
-| 2 | Tell BLoK what a click caused (new tab, download, navigation) | Live, not yet tried on a real click |
+| 2 | Tell BLoK what a click caused (new tab, download, navigation) | Live |
 | 3 | Hide passwords from the model, autofill them, log each use | Decided against (below) |
 | 4 | Fall back to the screen when page controls fail | Built. Click test passed on the desktop |
 
@@ -137,11 +137,11 @@ it clicked rather than credit the click.
 - "The window changed" means something changed, not that it's what you wanted. A change outside the
   window, or a small one, shows as "nothing visibly changed".
 
-## Not yet verified
+## Verification
 
-**Snapshots:** the extension is reloaded, and a real snapshot through it works: 72 controls in 20 ms
-on a live page, with no field values. No real "click X" has been said through it yet, so the last
-step (clicking by reference ID, and reporting what happened) has only been tested with stand-ins.
+**Snapshots:** verified in the real browser. The extension is reloaded, a real snapshot took 20 ms
+for 72 controls on a live page, with no field values, and "click X" with a slightly wrong name was
+tried by hand and works.
 
 The first try on the reloaded extension failed with "Unsupported action". The browser host has its
 own list of allowed actions and `snapshot` wasn't on it, which the stand-ins couldn't show. It's
