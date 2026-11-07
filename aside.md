@@ -8,14 +8,10 @@ repo. The app itself was not taken apart.
 
 | # | Idea | Status |
 |---|------|--------|
-| 1 | Compact page snapshots with reference IDs | Built. Needs an extension reload to go live |
-| 2 | Tell BLoK what a click caused (new tab, download, navigation) | Built. Needs the same reload |
+| 1 | Compact page snapshots with reference IDs | Live |
+| 2 | Tell BLoK what a click caused (new tab, download, navigation) | Live, not yet tried on a real click |
 | 3 | Hide passwords from the model, autofill them, log each use | Decided against (below) |
 | 4 | Fall back to the screen when page controls fail | Built. Click test passed on the desktop |
-
-**To turn on snapshots:** open `brave://extensions`, click Reload on BLoK, then reload your open
-pages. Until then BLoK keeps using the old literal-label click, and the screen fallback only works
-in other apps, not on web pages.
 
 ## Why BLoK does it differently
 
@@ -143,9 +139,13 @@ it clicked rather than credit the click.
 
 ## Not yet verified
 
-**Snapshots:** the whole chain hasn't run in your real browser, because the extension needs a
-reload first. So far, the snapshot was tested in real Brave on real pages, while the extension's
-message handling and the Python click flow were tested with stand-ins.
+**Snapshots:** the extension is reloaded, and a real snapshot through it works: 72 controls in 20 ms
+on a live page, with no field values. No real "click X" has been said through it yet, so the last
+step (clicking by reference ID, and reporting what happened) has only been tested with stand-ins.
+
+The first try on the reloaded extension failed with "Unsupported action". The browser host has its
+own list of allowed actions and `snapshot` wasn't on it, which the stand-ins couldn't show. It's
+fixed, and a test now checks the host allows everything BLoK sends and the extension handles.
 
 **Screen clicks:** verified on the real desktop. `./blok.sh click-test` passed: it clicks two buttons
 with the real pointer and `ydotool`, checks that BLoK sees them change, and checks that it refuses a

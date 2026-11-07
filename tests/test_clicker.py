@@ -245,6 +245,15 @@ class BrowserFallbackTests(unittest.TestCase):
     def test_pages_extensions_cant_touch_use_the_screen(self):
         self.assertEqual(self.click(error='Cannot access a chrome:// URL'), 'Clicked Launch')
 
+    def test_an_older_browser_host_uses_the_plain_click_not_the_screen(self):
+        def request(payload, **_):
+            if payload['action'] == 'snapshot':
+                raise browser.BrowserTaskError('Unsupported action')
+            return {'message': 'Clicked by label', 'verified': False}
+        with patch.object(browser, 'ping', return_value={'version': 'phase12-v1'}), patch.object(browser, 'request', side_effect=request):
+            self.assertEqual(self.backend.browser_task({'action': 'click', 'target': 'launch'}), 'Clicked by label')
+        self.backend.click_by_sight.assert_not_called()
+
     def test_screen_is_not_used_when_the_page_has_the_control(self):
         with patch.object(Backend, 'click_observed', return_value='Clicked Pricing'):
             self.assertEqual(self.click('pricing'), 'Clicked Pricing')

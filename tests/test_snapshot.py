@@ -103,6 +103,9 @@ class ResolveTests(unittest.TestCase):
 
 class ClickTests(unittest.TestCase):
     def setUp(self):
+        patcher = patch('blok.clicker.available', return_value=False)    # never the real pointer in tests
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.backend = Backend()
         self.backend.emit = Mock()
         self.backend.laya = None

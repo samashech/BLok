@@ -1287,7 +1287,9 @@ class Backend:
         target=task['target']
         try:
             seen=browser.request({'action':'snapshot'},on_progress=progress)
-        except browser.BrowserTaskError:
+        except browser.BrowserTaskError as error:
+            if 'Unsupported action' in str(error):      # the browser host is older than the extension
+                return browser.request(task,on_progress=progress)['message']
             # Pages extensions can't touch, like brave://settings or the Web Store.
             if self.can_click_by_sight():
                 return self.click_by_sight(target)
