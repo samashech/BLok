@@ -118,6 +118,7 @@ def language_parts(text: str) -> list[tuple[str, str]]:
     gets the English voice, and so does anything mostly English around a Hindi phrase.
     """
     from blok.hinglish import devanagari_text
+    text = re.sub(r'\bBLoK\b', 'Block', text)     # said as a word, not spelled B-L-O-K
     if not DEVANAGARI.search(text) and _is_roman_hindi(text):
         text = devanagari_text(text, roman=True)
     runs: list[list] = []

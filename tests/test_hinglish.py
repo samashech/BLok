@@ -65,6 +65,11 @@ class TranslateTests(unittest.TestCase):
 
 
 class BackendHinglishTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(Backend, 'reply_language', return_value='auto')     # not your real setting
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_hinglish_command_gets_a_hinglish_reply_in_a_hindi_voice(self):
         backend = Backend()
         backend.speaker = Mock()

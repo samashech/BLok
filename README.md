@@ -86,6 +86,12 @@ BLoK speaks Hyprland, so it can arrange your desktop, not just open apps.
 
 Layouts live in `~/.config/blok/layouts/` as plain JSON you can edit. Focus mode hides apps matching `BLOK_FOCUS_HIDE` (a regex of window classes) and puts everything back exactly where it was. In Hinglish: “focus mode chalu karo”, “code left mein aur browser right mein rakho”, “coding layout lagao”.
 
+## Talking to it
+
+BLoK is good company as well as a tool. Ask its name, how it's doing, who made it, or for a (bad) joke, in English or Hinglish: “what's your name”, “tell me a joke”, “kaise ho”, “ek joke sunao”. Say “my name is …” and it remembers, on this computer only. Goodbye and thanks close the conversation; anything else keeps it going.
+
+It's goofy, but it knows when not to be: if you say you're having a hard time, the jokes stop. Only whole sentences count as chat, so “play a joke podcast” still plays. With Ollama running, the local model answers other questions in the same voice; without it, BLoK just admits it didn't understand.
+
 ## Hinglish
 
 BLoK understands everyday Hinglish and answers the same way, in a Hindi voice. To always answer in one language, say “speak in hindi”, “speak in english” or “match my language”, or run `blok language hindi|english|auto`. The Hindi voice only ever gets Hindi and the English voice only English: mixed text is split between them, and short names inside a Hindi sentence are written in Hindi script. `BLOK_HINDI_VOICE` picks the voice (`hm_omega`, `hm_psi`, `hf_alpha`, `hf_beta`):

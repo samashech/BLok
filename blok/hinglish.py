@@ -446,7 +446,10 @@ EFFECTS = [
 
 def feminine(text: str) -> str:
     """The same reply for a female voice: the replies are written in the masculine."""
-    return text.replace('रहा हूँ', 'रही हूँ').replace('बोलूँगा', 'बोलूँगी')
+    for masculine, female in (('रहा हूँ', 'रही हूँ'), ('बोलूँगा', 'बोलूँगी'), ('दूँगा', 'दूँगी'), ('रखूँगा', 'रखूँगी'), ('रहता हूँ', 'रहती हूँ'), ('चलता हूँ', 'चलती हूँ'),
+                              ('सकता हूँ', 'सकती हूँ'), ('देता हूँ', 'देती हूँ'), ('जाता हूँ', 'जाती हूँ'), ('देता,', 'देती,'), ('देता ', 'देती '), ('भूल गया', 'भूल गई'), ('किया।', 'किया।')):
+        text = text.replace(masculine, female)
+    return text
 
 
 def _match(rules, text: str) -> str | None:

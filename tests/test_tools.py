@@ -260,7 +260,7 @@ class VoiceTests(unittest.TestCase):
     def test_backend_speaks_results_but_summarises_plans(self):
         backend = Backend()
         backend.speaker = Mock()
-        with patch('builtins.print'):
+        with patch('builtins.print'), patch.object(Backend, 'reply_language', return_value='auto'):
             backend.emit(type='action', message='Opened ~/Downloads')
         backend.speaker.say.assert_called_once_with('Opened your Downloads folder')
 

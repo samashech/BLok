@@ -391,6 +391,60 @@ class Backend:
             except Exception as error:
                 self.emit(type="engine", message="Follow-up listening failed: " + str(error))
 
+    def chat(self, text):
+        """Small talk gets answered by BLoK itself. True if this was chat. A yes or no to a card, or a
+        name for a skill you just taught it, isn't chat."""
+        from blok import chat
+        if self.has_pending_approval() or self.context.watching or getattr(self, 'pending_steps', None):
+            return False
+        reply = chat.respond(text, self.reply_language(), self.user_name(), self.remember_user_name)
+        if reply is None:
+            return False
+        self.reply_hinglish = reply.hindi
+        self.speak_chat(reply)
+        return True
+
+    def speak_chat(self, reply):
+        if reply.ends:
+            self.input_source = "typed"     # goodbye and thanks close the conversation
+        self.read_next = reply.text         # the words themselves pick the voice
+        self.emit(type="action", message=reply.text)
+
+    def settings(self):
+        try:
+            found = json.loads((DATA / 'settings.json').read_text())
+            return found if isinstance(found, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def user_name(self):
+        return self.settings().get('user_name')
+
+    def remember_user_name(self, name):
+        """Kept on this computer only, in BLoK's settings."""
+        settings = self.settings()
+        if name:
+            settings['user_name'] = name
+        else:
+            settings.pop('user_name', None)
+        DATA.mkdir(parents=True, exist_ok=True)
+        (DATA / 'settings.json').write_text(json.dumps(settings, indent=2) + "\n")
+
+    def understood_nothing(self, text):
+        """Nothing matched. The local model can answer a real question, if it's on. Otherwise, own up."""
+        from blok import chat
+        language = self.reply_language()
+        fallback = chat.confused(text, language)
+        if not chat.is_question(text):
+            self.speak_chat(fallback)
+            return
+        generation = self.generation
+        def ask():
+            answer = chat.ask_model(text, fallback.hindi)
+            if generation == self.generation:
+                self.events.put((generation, {"type": "chat_answer", "reply": chat.Reply(answer, hindi=fallback.hindi) if answer else fallback}))
+        threading.Thread(target=ask, daemon=True).start()
+
     @staticmethod
     def ASK_LANGUAGE(text):
         """'speak in hindi', 'hindi mein bolo', 'use the english voice', 'match my language'."""
@@ -1591,7 +1645,10 @@ class Backend:
                                  "laya", decision.intent, decision.probability, steps, "succeeded", timer.finish())
                 self.enqueue_action(decision.action)
             else:
-                self.emit(type="action", message=decision.reason)
+                if str(decision.reason).startswith("I'm not sure what you want") and intent is not None:
+                    self.understood_nothing(intent.raw_text)
+                else:
+                    self.emit(type="action", message=decision.reason)
                 if timer:
                     record_trace(intent.raw_text if intent else "", intent.normalized_text if intent else "",
                                  "laya", decision.intent, decision.probability, [], "failed", timer.finish(), ambiguity_reason=decision.reason)
@@ -1604,6 +1661,8 @@ class Backend:
         if not final:
             return
         self.input_source = source
+        if self.chat(text):
+            return
         if source != "typed" and self.END_CONVERSATION.fullmatch(text.strip()):
             self.input_source = "typed"         # ends the conversation: no follow-up
             self.stop()
@@ -1755,6 +1814,8 @@ class Backend:
                 elif generation == self.generation:
                     if event["type"] in ("decision", "decision_error"):
                         self.finish_decision(event)
+                    elif event["type"] == "chat_answer":
+                        self.speak_chat(event["reply"])
                     elif event["type"] == "action_done":
                         self.actions_pending=max(0,self.actions_pending-1)
                         self.emit(type="activity",state="executing" if self.actions_pending else "thinking" if self.pending else "idle")
