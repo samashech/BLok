@@ -11,13 +11,11 @@ repo. The app itself was not taken apart.
 | 1 | Compact page snapshots with reference IDs | Built. Needs an extension reload to go live |
 | 2 | Tell BLoK what a click caused (new tab, download, navigation) | Built. Needs the same reload |
 | 3 | Hide passwords from the model, autofill them, log each use | Decided against (below) |
-| 4 | Fall back to the screen when page controls fail | Built. Needs `ydotool` installed |
+| 4 | Fall back to the screen when page controls fail | Built. Click test passed on the desktop |
 
-**To turn it on:**
-1. Open `brave://extensions`, click Reload on BLoK, then reload your open pages. Until then BLoK
-   keeps using the old literal-label click, so nothing breaks.
-2. Run `sudo pacman -S ydotool`. Without it, BLoK moves the pointer onto the words and asks you to
-   click.
+**To turn on snapshots:** open `brave://extensions`, click Reload on BLoK, then reload your open
+pages. Until then BLoK keeps using the old literal-label click, and the screen fallback only works
+in other apps, not on web pages.
 
 ## Why BLoK does it differently
 
@@ -149,9 +147,6 @@ it clicked rather than credit the click.
 reload first. So far, the snapshot was tested in real Brave on real pages, while the extension's
 message handling and the Python click flow were tested with stand-ins.
 
-**Screen clicks:** no real click has landed yet. Tested so far: the private daemon starts, answers
-and cleans up (with a private copy of `ydotool`), OCR and the lookalike check on drawn light and dark
-windows at two sizes, and the safety checks and click reports with stand-ins. Testing on the live
-desktop kept losing focus while the computer was in use, so it was stopped. To finish it, install
-`ydotool` and run `./blok.sh click-test` with your hands off the mouse. It opens a small test window,
-clicks its buttons, and reports what landed and what BLoK saw happen.
+**Screen clicks:** verified on the real desktop. `./blok.sh click-test` passed: it clicks two buttons
+with the real pointer and `ydotool`, checks that BLoK sees them change, and checks that it refuses a
+label shown twice. This was on a small test window, so everyday apps haven't been tried yet.
