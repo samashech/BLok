@@ -394,7 +394,11 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
                 'address': r'(?:go to|focus|click(?: on)?|select|open)(?: the)? (?:address|url) bar',
                 'stop': r'stop listening',
             }
-            if action.kind in fixed and not re.fullmatch(fixed[action.kind] + r'[.!?]*', candidate, re.I):
+            if action.kind == 'photo':
+                from blok.nlu import take_photo
+                if not take_photo(candidate):
+                    raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
+            elif action.kind in fixed and not re.fullmatch(fixed[action.kind] + r'[.!?]*', candidate, re.I):
                 raise ValueError(f'Unsupported step: {restore(clause)}. Nothing was run.')
             if action.kind == 'routine':
                 from blok.routines import get_routine

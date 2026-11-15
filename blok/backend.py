@@ -569,6 +569,20 @@ class Backend:
             return 'auto'
         return None
 
+    @staticmethod
+    def press_shutter(wait=8.0):
+        """Take the picture in the camera app. Its button stays disabled while the camera warms
+        up, so "open camera and click a picture" waits for it rather than failing straight away."""
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                desktop.control({'action': 'click', 'target': 'Take Picture'})
+                return 'Took a picture'
+            except RuntimeError as error:
+                if not re.search(r'disabled|no .*control|not found|named', str(error), re.I) or time.monotonic() >= deadline:
+                    raise
+            time.sleep(0.4)
+
     def show_hands_free(self, state):
         """The overlay follows the listener: animated only while it is really listening for you."""
         if self.voice is not None or self.listening:
@@ -895,7 +909,7 @@ class Backend:
                 message = "Saved note · " + self.note["title"]
             elif kind == "photo":
                 if self.camera_target == "desktop":
-                    message=desktop.control({'action':'click','target':'Take Picture'})['message']
+                    message=self.press_shutter()
                 else:
                     self.emit(type="camera", capture=True)
                     self._record_executed_action(action)

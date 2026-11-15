@@ -113,3 +113,22 @@ console.log('PASS: uncertain actions are not repeated; unverified steps stop; wr
  assert.equal((await run({action:'game_text',hosts:['gulper.io']})).found,false);
  console.log('PASS: game text comes from the game frame only');
 }
+{
+ // Google search works like the address bar: results load in the tab you're on, never a new tab.
+ for(const start of ['brave://newtab/','chrome://newtab/','chrome://new-tab-page/','about:blank','https://example.com/page']) {
+  reset(start);
+  const result=await run({action:'search',site:'google',query:'games'});
+  assert.equal(events.filter(e=>e[0]==='create').length,0,start);
+  assert.ok(events.some(e=>e[0]==='update'&&e[1].url==='https://www.google.com/search?q=games'),start);
+  assert.equal(events.some(e=>e[0]==='op'&&e[1]==='search'),false,start);   // no typing into google.com
+  assert.equal(result.context.query,'games');assert.equal(result.tabId,1);
+ }
+ // "open a new tab" then "search for games": the search lands in that new tab.
+ reset('https://github.com/');
+ const opened=await run({action:'new_tab'});
+ const searched=await run({action:'search',site:'google',query:'games',target_tab_id:opened.tabId});
+ assert.equal(searched.tabId,opened.tabId);
+ assert.equal(events.filter(e=>e[0]==='create').length,1);
+ assert.equal(tabs.get(1).url,'https://github.com/');                      // the page you were on is untouched
+ console.log('PASS: google search loads in the current tab, like the address bar');
+}

@@ -464,6 +464,15 @@ def _page_navigation(norm: str, context: "ConversationContext | None") -> dict |
     return {'action': 'click', 'target': target, 'navigate': True}
 
 
+PHOTO = re.compile(r'(?:take|click|capture|snap|shoot|grab)(?: me)?(?: a| an| one| my| another)? (?:picture|photo|pic|selfie|snap|snapshot|photograph|image)(?: of me)?(?: for me)?(?: please)?|'
+                   r'(?:photo|pic|picture|selfie|tasveer|tasvir|foto|meri photo|ek photo) (?:kheencho|kheecho|khincho|khicho|khinch do|kheech do|khich do|kheench do|lo|le lo|click karo|kar do)', re.I)
+
+
+def take_photo(norm: str) -> bool:
+    """"Click a picture" is everyday Indian English for taking one, not a button called "a picture"."""
+    return bool(PHOTO.fullmatch(norm.strip().strip('.!?')))
+
+
 ORDINAL_WORDS = re.compile(r'\b(?:first|second|third|fourth|fifth|\d+(?:st|nd|rd|th)?) (?:result|video|link|one)\b', re.I)
 
 def resolve_intent(text: str, context: ConversationContext | None = None) -> ResolvedIntent:
@@ -472,6 +481,8 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     norm = normalize_utterance(raw)
 
     # 0. Empty input guard
+    if norm and take_photo(norm):
+        return ResolvedIntent(intent_type="photo", confidence=0.96, raw_text=raw, normalized_text=norm, action_kind="photo", action_value="")
     if not norm or not any(c.isalnum() for c in norm):
         return ResolvedIntent(
             intent_type="empty",
@@ -1150,7 +1161,7 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
         )
 
     # 20. Photo
-    if re.fullmatch(r'take(?: a)? (?:picture|photo|selfie)(?: of me)?', norm, re.I):
+    if take_photo(norm):
         return ResolvedIntent(
             intent_type="photo",
             confidence=0.95,

@@ -60,7 +60,8 @@ export async function run(req, progress=()=>{}) {
       return sameDestination(tab.url,url);
     });
   }
-  const isBlankOrNewTab=u=>!u||u==='about:blank'||u==='chrome://newtab/'||u==='brave://newtab/';
+  // Any new tab page counts: Brave, Chrome and their variants all use different addresses.
+  const isBlankOrNewTab=u=>!u||/^(?:about:blank|(?:chrome|brave|edge):\/\/(?:newtab|new-tab-page)\/?|chrome-search:\/\/local-ntp)/.test(u);
   async function siteTab(url, targetTabId) {
     if(targetTabId) {
       try {
@@ -274,6 +275,21 @@ export async function run(req, progress=()=>{}) {
       const repo=await flow.observe('Finding the matching repository',()=>page({op:'github_repository',query:task.query}));
       await navigate(repo.url);
       return confirmed('Opened repository '+repo.title,'Requested repository URL loaded',{url:tab.url});
+    }
+    if(task.action==='search'&&(task.site||'google')==='google') {
+      // Like typing into the address bar: the results load in the tab you're on. No new tab, no home page.
+      if(task.target_tab_id){try{tab=await chrome.tabs.get(task.target_tab_id);}catch{}}
+      const results='https://www.google.com/search?q='+encodeURIComponent(task.query);
+      if(tab)await focus(tab);
+      await navigate(results);
+      await flow.verify('Waiting for google search results',async()=>{
+        const current=await chrome.tabs.get(tab.id);
+        return siteOf(current.url)==='google'&&new URL(current.url).searchParams.get('q')===task.query&&await page({op:'search_ready',site:'google',query:task.query});
+      });
+      tab=await chrome.tabs.get(tab.id);
+      return confirmed('Searched google for '+task.query,'Matching search URL and rendered results observed',{
+        url:tab.url,tab_id:tab.id,tabId:tab.id,context:{tabId:tab.id,url:tab.url,site:'google',query:task.query}
+      });
     }
     if(['search','play','navigate'].includes(task.action)) {
       const site=task.site||siteOf(tab?.url)||'google';

@@ -81,6 +81,14 @@ class FollowUpTests(unittest.TestCase):
         self.assertEqual((tab.active_tab_id, tab.active_site, tab.active_url), (None, None, None))
         self.assertEqual(self.task('search for games', tab)[1], {'action': 'search', 'site': 'google', 'query': 'games'})
 
+    def test_click_a_picture_takes_a_photo(self):
+        from blok.plans import proposals
+        for said in ('click a picture', 'click my photo', 'take a photo', 'click a selfie for me', 'photo kheecho', 'take a picture please'):
+            self.assertEqual(self.task(said)[0], 'photo', said)
+        self.assertEqual([a.kind for _, a in proposals('open camera and click a picture', ConversationContext())], ['open', 'photo'])
+        for said in ('click photos', 'click the picture button', 'click picture of the day', 'click a photo of the cat'):
+            self.assertEqual(self.task(said)[0], 'ui_control', said)
+
     def test_click_that_button_points(self):
         self.assertEqual(self.task('click that button')[1]['pointer'], True)
         self.assertEqual(self.task('hit this')[1]['pointer'], True)
@@ -131,6 +139,23 @@ class BackendFollowUpTests(unittest.TestCase):
             self.backend.execute(action)
         self.assertEqual(request.call_args.args[0]['action'], 'site_search')
         self.assertEqual(self.backend.context.active_url, 'https://example-shop.in/s?q=games')
+
+    def test_the_camera_shutter_is_waited_for_while_it_warms_up(self):
+        from blok import desktop
+        answers = [RuntimeError('That control is disabled.'), RuntimeError('That control is disabled.'), {'message': 'Clicked Take Picture'}]
+        def control(task, **_):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        with patch.object(desktop, 'control', side_effect=control), patch('blok.backend.time.sleep'):
+            self.assertEqual(self.backend.press_shutter(), 'Took a picture')
+        with patch.object(desktop, 'control', side_effect=RuntimeError('The active window changed after observation.')), patch('blok.backend.time.sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'window changed'):
+                self.backend.press_shutter()      # other errors aren't retried
+        with patch.object(desktop, 'control', side_effect=RuntimeError('That control is disabled.')), patch('blok.backend.time.sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'disabled'):
+                self.backend.press_shutter(wait=0)
 
     def test_pointer_click_confirms_risky_labels(self):
         calls = []

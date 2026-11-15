@@ -404,6 +404,7 @@ REPLIES = [
     (r'Battery is at (?P<n>\d+)% and (?P<s>\w+)\.', lambda m: f'बैटरी {m["n"]} प्रतिशत है' + (', और चार्ज हो रही है' if m['s'] == 'charging' else '')),
     (r'Closed (?P<x>.+)', lambda m: f'{_name(m["x"])} बंद कर दिया'),
     (r'Screenshot taken', lambda m: 'स्क्रीनशॉट ले लिया'),
+    (r'Took a picture', lambda m: 'फ़ोटो खींच ली'),
     (r'Clicked (?P<x>.+)', lambda m: f'{_name(m["x"])} पर क्लिक कर दिया'),
     (r'Scrolled (?P<d>down|up|top|bottom)', lambda m: {'down': 'नीचे', 'up': 'ऊपर', 'top': 'सबसे ऊपर', 'bottom': 'सबसे नीचे'}[m['d']] + ' स्क्रॉल कर दिया'),
     (r'Showing (?P<n>\d+) numbers', lambda m: f'{m["n"]} नंबर दिखा दिए'),
