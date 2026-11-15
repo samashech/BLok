@@ -132,3 +132,12 @@ console.log('PASS: uncertain actions are not repeated; unverified steps stop; wr
  assert.equal(tabs.get(1).url,'https://github.com/');                      // the page you were on is untouched
  console.log('PASS: google search loads in the current tab, like the address bar');
 }
+{
+ reset('https://example.com/');
+ tabs.set(2,{id:2,windowId:1,active:false,url:'https://github.com/samashech',title:'samashech · GitHub',status:'complete'});
+ tabs.set(3,{id:3,windowId:1,active:false,url:'https://www.youtube.com/',title:'YouTube',status:'complete'});
+ const switched=await run({action:'switch_tab',query:'github'});
+ assert.equal(switched.tabId,2);assert.equal(tabs.get(2).active,true);assert.equal(tabs.get(1).active,false);
+ await assert.rejects(run({action:'switch_tab',query:'zebra'}),/No open tab matches/);
+ console.log('PASS: switch to a tab by name');
+}

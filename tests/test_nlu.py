@@ -130,7 +130,7 @@ class IntentResolutionTableTests(unittest.TestCase):
             ("press enter", "browser_key", "browser_key", "enter"),
             ("hit enter", "browser_key", "browser_key", "enter"),
             ("go back", "browser_key", "browser_key", "back"),
-            ("reload the page", "browser_key", "browser_key", "reload"),
+            ("reload the page", "everyday:shortcut", "tool", {"tool": "shortcut", "name": "refresh"}),
 
             # 7. Desktop applications
             ("open terminal", "open_app", "open", "terminal"),
@@ -179,8 +179,7 @@ class IntentResolutionTableTests(unittest.TestCase):
             "delete all files",
             "erase the disk",
             "format drive c",
-            "shut down computer",
-            "reboot now",
+            "shut down the server",
             "drop database users",
         ]
         for c in cases:
@@ -189,6 +188,9 @@ class IntentResolutionTableTests(unittest.TestCase):
                 self.assertEqual(res.intent_type, "unsupported")
                 self.assertEqual(res.confidence, 0.0)
                 self.assertIn("Nothing was run", res.ambiguity_reason)
+        # Turning this computer off is allowed, through the power tool, which always asks on screen first.
+        for c in ("shut down computer", "reboot now"):
+            self.assertEqual(resolve_intent(c).intent_type, "everyday:power", c)
 
     def test_under_specified_queries_require_clarification(self):
         # Bare "search" or "play" without payload requires clarification

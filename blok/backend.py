@@ -995,6 +995,22 @@ class Backend:
             return system.brightness(task['op'], task.get('level'))
         if name == 'media':
             return system.media(task['op'])
+        if name == 'shortcut':
+            return system.shortcut(task['name'])
+        if name == 'radio':
+            return system.radio(task['radio'], bool(task['on']))
+        if name == 'power':
+            # Unsaved work could be lost: always asked on screen, never done on a misheard word.
+            self.confirm({'suspend': 'Put the computer to sleep?', 'poweroff': 'Shut down the computer?', 'reboot': 'Restart the computer?'}[task['op']],
+                         action='power', value=task['op'])
+            return system.power(task['op'])
+        if name == 'screenshot_window':
+            return system.screenshot_window(hide_overlay=self.hide_overlay)
+        if name == 'switch_tab':
+            self.require_extension('Switching tabs', 'phase15-v1')
+            result = browser.request({'action': 'switch_tab', 'query': task['query']})
+            self.context.update_tab(result.get('tabId'), url=result.get('url'))
+            return result['message']
         if name == 'lock':
             return system.lock()
         if name == 'screen':
@@ -1019,7 +1035,18 @@ class Backend:
             self.emit(type="theme", theme=theme)
             return theme['name'] + ' theme'
         if name == 'window':
-            return system.window(task['op'], task.get('workspace'), task.get('app'))
+            try:
+                return system.window(task['op'], task.get('workspace'), task.get('app'))
+            except RuntimeError as error:
+                # "close youtube": not an app, so close the browser tab with that name instead.
+                if task['op'] != 'close' or not task.get('app') or 'No open window' not in str(error) or not self.has_tab_switching():
+                    raise
+                try:
+                    found = browser.request({'action': 'switch_tab', 'query': task['app']})
+                except browser.BrowserTaskError:
+                    raise error from None
+                system.shortcut('close_tab')
+                return 'Closed the ' + found['message'].removeprefix('Switched to ') + ' tab'
         if name == 'download':
             return self.download(task)
         if name == 'file_pick':
@@ -1062,7 +1089,7 @@ class Backend:
             return files.trash(path)
         raise RuntimeError('Unsupported tool: ' + str(name))
 
-    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1', 'phase13-v1', 'phase14-v1')
+    EXTENSION_VERSIONS = ('phase7-v1', 'phase8-v1', 'phase9-v1', 'phase10-v1', 'phase11-v1', 'phase12-v1', 'phase13-v1', 'phase14-v1', 'phase15-v1')
 
     def browser_in_front(self):
         try:
@@ -1538,6 +1565,12 @@ class Backend:
             # What you said sounded harmless, but the control it fits isn't. (A risky word you said was already confirmed.)
             self.confirm(f'Click "{control["name"][:60]}"?',action='click',value=control['name'])
         return self.click_observed(control['control'],seen['page'],progress)
+
+    def has_tab_switching(self):
+        try:
+            return self.extension_version() in self.EXTENSION_VERSIONS[self.EXTENSION_VERSIONS.index('phase15-v1'):]
+        except RuntimeError:
+            return False
 
     @staticmethod
     def can_click_by_sight():

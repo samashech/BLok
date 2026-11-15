@@ -106,6 +106,13 @@ def label(task: dict) -> str:
         'close_others': f'Close everything except {task.get("keep")}', 'lock': 'Lock the screen', 'theme': f'Switch to the {task.get("name")} theme', 'answer': f'Tell the {task.get("topic")}',
         'download': f'Download {task.get("url") or query}',
     }
+    from blok.system import SHORTCUTS
+    labels.update({
+        'shortcut': SHORTCUTS.get(task.get('name'), ([], '', str(task.get('name')), False))[2],
+        'radio': f'Turn {"on" if task.get("on") else "off"} {"Wi-Fi" if task.get("radio") == "wifi" else "Bluetooth"}',
+        'power': {'suspend': 'Sleep', 'poweroff': 'Shut down', 'reboot': 'Restart'}.get(task.get('op'), 'Power'),
+        'screenshot_window': 'Screenshot this window', 'switch_tab': f'Switch to the {task.get("query", "")} tab',
+    })
     return labels.get(name, name)
 
 

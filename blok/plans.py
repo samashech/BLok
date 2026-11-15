@@ -78,7 +78,7 @@ def assess_step_risk(kind_or_action: Any, value: str | None = None, confidence: 
             name = ""
         if name in ("file_find", "file_read", "file_pick", "answer"):
             return "SAFE_READ", False, ""
-        if name in ("file_open", "volume", "brightness", "media"):
+        if name in ("file_open", "volume", "brightness", "media", "shortcut", "switch_tab", "screenshot_window"):
             return "SAFE_NAVIGATE", False, ""
         return "STATE_MUTATING", False, ""
 
@@ -356,8 +356,11 @@ def proposals(text: str, context: ConversationContext | None = None) -> list[tup
             candidate = re.sub(r'^(?:please |can you |could you |would you |i want you to |let\'s |yo bro |yo |bro )', '', clause, flags=re.I)
             candidate = re.sub(r'\s+(?:for me real quick|real quick|for me|for us|right now|please)$', '', candidate, flags=re.I)
 
-            # Check unsupported OS / system verbs first
-            if UNSUPPORTED_VERB.search(candidate):
+            # Check unsupported OS / system verbs first. Exact power phrases are allowed: they're
+            # always confirmed on screen (blok/everyday.py), so a stray "restart" can't reach them.
+            from blok import everyday
+            power = everyday.intent(candidate)
+            if UNSUPPORTED_VERB.search(candidate) and not (power and '"tool": "power"' in power[1]):
                 raise ValueError('Unsupported step. Nothing was run.')
             if re.search(r'\b(?:run|start|execute)\b.*\broutine\b', candidate, re.I):
                 from blok.routines import get_routine

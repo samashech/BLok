@@ -120,7 +120,7 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(self.tool('close this window'), {'tool': 'window', 'op': 'close'})
         self.assertEqual(self.tool('move this window to workspace three'), {'tool': 'window', 'op': 'move', 'workspace': '3'})
         self.assertEqual(self.tool('what time is it'), {'tool': 'answer', 'topic': 'time'})
-        self.assertEqual(self.tool('pause the music'), {'tool': 'media', 'op': 'toggle'})
+        self.assertEqual(self.tool('pause the music'), {'tool': 'media', 'op': 'pause'})   # never a toggle that could resume
 
     def test_file_rules_need_file_like_targets(self):
         self.assertEqual(self.tool('open my downloads folder')['tool'], 'file_open')
@@ -138,8 +138,10 @@ class RuleTests(unittest.TestCase):
         for text in ('download minecraft from the browser', 'rename report.pdf to old.pdf', 'delete old.txt'):
             steps = proposals(text)
             self.assertEqual(steps[0][1].kind, 'tool', text)
+        # Shutting down is allowed, but only through the always-confirmed power tool.
+        self.assertEqual(json.loads(proposals('shut down the computer')[0][1].value), {'tool': 'power', 'op': 'poweroff'})
         with self.assertRaises(ValueError):
-            proposals('shut down the computer')
+            proposals('shut down the server')
 
     def test_unknown_clause_is_left_for_laya(self):
         steps = proposals('open youtube and make it a bit louder')

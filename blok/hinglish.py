@@ -91,6 +91,22 @@ RULES: list[tuple[str, str]] = [
     # Screenshots, themes, windows, workspaces
     (r'(?:ek\s+)?screenshot\s+' + V['take'], 'take a screenshot'),
     (r'(?P<theme>halloween|diwali|minecraft|omarchy|liquid)\s+(?:wala\s+|waala\s+)?(?:theme\s+)?(?:lagao|laga\s+do|kar\s+do|set\s+karo|chalu\s+karo)', 'switch to the {theme} theme'),
+    (r'(?:wi-?fi|wifi|net|internet)\s+(?:band|bandh|off)\s*(?:kar(?:o|\s*do|\s*de))?', 'turn off wifi'),
+    (r'(?:wi-?fi|wifi|net|internet)\s+(?:chalu|on|chaalu|shuru)\s*(?:kar(?:o|\s*do|\s*de))?', 'turn on wifi'),
+    (r'bluetooth\s+(?:band|bandh|off)\s*(?:kar(?:o|\s*do|\s*de))?', 'turn off bluetooth'),
+    (r'bluetooth\s+(?:chalu|on|chaalu|shuru)\s*(?:kar(?:o|\s*do|\s*de))?', 'turn on bluetooth'),
+    (r'(?:computer|laptop|pc|system)\s+(?:band|bandh|shut\s*down)\s*(?:kar(?:o|\s*do|\s*de))?', 'shut down the computer'),
+    (r'(?:computer|laptop|pc|system)\s+(?:restart|reboot)\s*(?:kar(?:o|\s*do|\s*de))?', 'restart the computer'),
+    (r'(?:nay[aei]|ek\s+nay[aei])\s+tab\s+(?:kholo|khol\s*do|open\s+kar(?:o|\s*do))', 'open a new tab'),
+    (r'(?:agla|agle)\s+tab(?:\s+(?:pe|par)\s+(?:jao|chalo))?', 'next tab'),
+    (r'(?:pichla|pichhle|pichle)\s+tab(?:\s+(?:pe|par)\s+(?:jao|chalo))?', 'previous tab'),
+    (r'(?:page|tab)?\s*(?:refresh|reload)\s+kar(?:o|\s*do|\s*de)', 'refresh the page'),
+    (r'(?:ye|yeh|isko|isse)?\s*copy\s+kar(?:o|\s*do|\s*lo)', 'copy'),
+    (r'(?:yahan\s+)?paste\s+kar(?:o|\s*do)', 'paste'),
+    (r'undo\s+kar(?:o|\s*do)', 'undo'),
+    (r'(?:sab|sabkuch|sab\s+kuch)\s+select\s+kar(?:o|\s*do)', 'select all'),
+    (r'(?:zoom\s+in|bada)\s+kar(?:o|\s*do)', 'zoom in'),
+    (r'(?:zoom\s+out|chhota|chota)\s+kar(?:o|\s*do)', 'zoom out'),
     (r'(?:ye|yeh|is|iss)?\s*(?:window|app)\s+(?:ko\s+)?' + V['close'], 'close this window'),
     (r'(?:ye|yeh|is|iss)?\s*(?:window|app)\s+(?:ko\s+)?(?:full\s*screen|bada)\s+kar(?:o|\s*do)', 'make this window fullscreen'),
     (r'(?:ye|yeh|is|iss)?\s*(?:window|app)\s+(?:ko\s+)?(?:workspace|desktop)\s+(?P<n>\w+)\s+(?:' + ON + r'\s+)?(?:bhejo|bhej\s+do|daalo|dalo|le\s+jao)', 'move this window to workspace {n}'),
@@ -102,7 +118,7 @@ RULES: list[tuple[str, str]] = [
     (r'(?:(?P<site>google|youtube|yt|steam|amazon|reddit|github|wikipedia|flipkart)\s+' + ON + r'\s+)?(?P<q>.+?)(?:\s+ke\s+baare\s+(?:mein|me|main))?\s+' + V['search'], 'search for {q}{site}'),
     (r'(?P<x>.+?)\s+' + V['delete'], 'delete {x}'),
     (r'(?P<x>.+?)\s+(?:ko\s+)?' + V['open'], 'open {x}'),
-    (r'(?P<x>.+?)\s+' + V['close'], 'close this window'),
+    (r'(?P<x>.+?)\s+' + V['close'], 'close {x}'),
 ]
 _COMPILED = [(re.compile(pattern + r'[\s.!?]*$', re.I), template) for pattern, template in RULES]
 CLAUSE_JOIN = re.compile(r'\s+(?:aur\s+(?:phir|fir)|aur|phir|fir|uske\s+baad|iske\s+baad|then)\s+', re.I)

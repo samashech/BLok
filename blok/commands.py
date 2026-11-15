@@ -115,7 +115,8 @@ def parse(text: str, final: bool = True, context: ConversationContext | None = N
         elif ("title" in verb or verb == "call it") and closed and arg:
             action = Action("title", arg)
         elif verb.startswith(("write", "add")) and closed and arg:
-            action = Action("write", arg)
+            # "add milk to my notes": the note is where it goes, not part of what's written
+            action = Action("write", re.sub(r"\s+(?:to|in|into|on) (?:my |the |this )?(?:notes?|note ?pad|list)$", "", arg, flags=re.I) or arg)
         elif verb.startswith("take") and closed:
             action = Action("photo")
         if action:

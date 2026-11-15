@@ -43,6 +43,12 @@ You don't need to phrase things properly. Fillers, stutters, slang and mid-sente
 | “open youtube” … “get me a pewdiepie video” | plays one, in the same tab |
 | “open steam” … “search for phantom blade” | searches Steam, because that's the page in front of you |
 | “click add to card” · “second comments” · “save in the footer” | finds the control you meant, even if a word was misheard, and says if the click opened a tab or started a download |
+| “close this tab” · “next tab” · “switch to the github tab” · “reopen the closed tab” · “refresh” · “zoom in” · “bookmark this” | tabs and pages, in the browser even if another app is in front |
+| “copy” · “paste” · “undo” · “select all” | editing keys, in whatever app is in front |
+| “close brave” · “brave band karo” | closes that app; for a site like “close youtube”, its tab |
+| “mute” / “unmute” · “pause” / “resume” · “skip this song” · “brightness to 40” | says exactly what you want, never a toggle that might do the opposite |
+| “turn off wifi” · “bluetooth chalu karo” · “screenshot this window” · “what's the weather in Delhi” | system and quick answers |
+| “go to sleep” · “shut down” · “restart the computer” | always asks on screen first |
 | *(pointing with the mouse)* “click that button” | clicks what you're pointing at; asks first if it says delete, buy or pay |
 | “find my resume pdf” … “open it” | finds it in your home folder, then opens it |
 | “add buy milk to my todo file” | appends the line |

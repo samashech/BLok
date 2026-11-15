@@ -483,6 +483,13 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     # 0. Empty input guard
     if norm and take_photo(norm):
         return ResolvedIntent(intent_type="photo", confidence=0.96, raw_text=raw, normalized_text=norm, action_kind="photo", action_value="")
+    from blok import everyday
+    found = everyday.intent(raw) if norm else None
+    if found and found[1] == json.dumps({'tool': 'media', 'op': 'next'}) and context and context.active_site == 'spotify':
+        found = None        # the Spotify tab's own next button, which can be verified
+    if found:
+        return ResolvedIntent(intent_type="everyday:" + json.loads(found[1]).get('tool', json.loads(found[1]).get('action', '')), confidence=0.95,
+                              raw_text=raw, normalized_text=norm, action_kind=found[0], action_value=found[1])
     if not norm or not any(c.isalnum() for c in norm):
         return ResolvedIntent(
             intent_type="empty",
@@ -793,6 +800,8 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     m = re.fullmatch(r'(?:get me|give me|play(?: me)?|put on|pull up|bring up|show me|find me)(?: a| an| one| some| the)? (.+?) (?:video|vid|clip)', norm, re.I)
     if not m and here == 'youtube':
         m = re.fullmatch(r'(?:get me|give me|play(?: me)?|put on|queue up)(?: a| an| one| some| the)? (.+?)(?: videos?)?', norm, re.I)
+        if m and re.search(r'\b(?:on|in|from) (?:spotify|soundcloud|apple music|youtube music)$', m[1], re.I):
+            m = None        # "play X on spotify" while on YouTube: you named the place
     if m and not re.fullmatch(r'(?:first|second|third|fourth|fifth|next|another|that|this|it)(?: one)?', m[1], re.I):
         query = m[1].strip()
         task = {"action": "play", "site": "youtube", "query": query}
@@ -1150,6 +1159,8 @@ def resolve_intent(text: str, context: ConversationContext | None = None) -> Res
     m = re.fullmatch(r'(?:write|add)(?: down)? (.+)', norm, re.I)
     if m:
         body = m[1].strip().strip('"\'')
+        # "add milk to my notes": the note is where it goes, not part of what's written
+        body = re.sub(r"\s+(?:to|in|into|on) (?:my |the |this )?(?:notes?|note ?pad|list)$", "", body, flags=re.I) or body
         return ResolvedIntent(
             intent_type="write",
             entities={"body": body},

@@ -31,6 +31,9 @@ def volume_percent() -> int | None:
 
 
 def volume(op: str, level: int | None = None) -> str:
+    if op in ('mute_on', 'mute_off'):          # say exactly which: a toggle can do the opposite
+        run(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', '1' if op == 'mute_on' else '0'])
+        return 'Sound muted' if op == 'mute_on' else 'Sound unmuted'
     if op == 'set':
         level = max(0, min(100, int(level or 0)))
         run(['wpctl', 'set-volume', '@DEFAULT_AUDIO_SINK@', f'{level}%'])
@@ -63,9 +66,82 @@ def brightness(op: str, level: int | None = None) -> str:
 
 
 def media(op: str) -> str:
-    method = {'toggle': 'playPause', 'next': 'next', 'previous': 'previous'}[op]
+    method = {'toggle': 'playPause', 'next': 'next', 'previous': 'previous', 'pause': 'pause', 'play': 'play'}[op]
     run(['omarchy-shell', 'media', method])
-    return {'toggle': 'Toggled playback', 'next': 'Next track', 'previous': 'Previous track'}[op]
+    return {'toggle': 'Toggled playback', 'next': 'Next track', 'previous': 'Previous track', 'pause': 'Paused', 'play': 'Playing'}[op]
+
+
+# name: (modifiers, key, done message, browser only)
+SHORTCUTS = {
+    'copy': (['ctrl'], 'c', 'Copied', False), 'cut': (['ctrl'], 'x', 'Cut', False), 'paste': (['ctrl'], 'v', 'Pasted', False),
+    'undo': (['ctrl'], 'z', 'Undone', False), 'redo': (['ctrl', 'shift'], 'z', 'Redone', False), 'select_all': (['ctrl'], 'a', 'Selected everything', False),
+    'close_tab': (['ctrl'], 'w', 'Closed the tab', True), 'reopen_tab': (['ctrl', 'shift'], 't', 'Reopened the last closed tab', True),
+    'next_tab': (['ctrl'], 'Tab', 'Next tab', True), 'previous_tab': (['ctrl', 'shift'], 'Tab', 'Previous tab', True),
+    'refresh': ([], 'F5', 'Refreshed the page', True), 'zoom_in': (['ctrl'], 'equal', 'Zoomed in', True),
+    'zoom_out': (['ctrl'], 'minus', 'Zoomed out', True), 'zoom_reset': (['ctrl'], '0', 'Zoom reset', True), 'bookmark': (['ctrl'], 'd', 'Bookmarked', True),
+}
+
+
+def shortcut(name: str) -> str:
+    """A keyboard shortcut. Browser ones go to the browser, even if something else is in front."""
+    mods, key, done, browser_only = SHORTCUTS[name]
+    if browser_only:
+        from blok import browser
+        browser.focus()
+    args = ['wtype']
+    for mod in mods:
+        args += ['-M', mod]
+    args += ['-k', key]
+    for mod in reversed(mods):
+        args += ['-m', mod]
+    run(args)
+    return done
+
+
+def radio(kind: str, on: bool) -> str:
+    if kind == 'wifi':
+        run(['nmcli', 'radio', 'wifi', 'on' if on else 'off'])
+        return 'Wi-Fi on' if on else 'Wi-Fi off'
+    if shutil.which('bluetoothctl'):
+        run(['bluetoothctl', 'power', 'on' if on else 'off'])
+    else:
+        run(['rfkill', 'unblock' if on else 'block', 'bluetooth'])
+    return 'Bluetooth on' if on else 'Bluetooth off'
+
+
+POWER = {'suspend': (['systemctl', 'suspend'], 'Going to sleep'), 'poweroff': (['systemctl', 'poweroff'], 'Shutting down'),
+         'reboot': (['systemctl', 'reboot'], 'Restarting')}
+
+
+def power(op: str) -> str:
+    command, done = POWER[op]
+    subprocess.Popen(command, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return done
+
+
+def screenshot_window(hide_overlay=None) -> str:
+    """The window in front, saved to Pictures and copied to the clipboard."""
+    import os
+    import time
+    from pathlib import Path
+    active = active_window()
+    if not active.get('size'):
+        raise RuntimeError('No window is focused.')
+    (x, y), (w, h) = active['at'], active['size']
+    folder = Path(os.environ.get('XDG_PICTURES_DIR') or Path.home() / 'Pictures')
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / time.strftime('screenshot-%Y-%m-%d_%H-%M-%S.png')
+    if hide_overlay:
+        hide_overlay(True)
+    try:
+        run(['grim', '-g', f'{x},{y} {w}x{h}', str(path)])
+    finally:
+        if hide_overlay:
+            hide_overlay(False)
+    if shutil.which('wl-copy'):
+        with path.open('rb') as image:
+            subprocess.run(['wl-copy', '--type', 'image/png'], stdin=image, timeout=5)
+    return 'Screenshot of ' + (active.get('class') or 'the window') + ' saved to Pictures'
 
 
 def lock() -> str:
@@ -93,6 +169,22 @@ def window(op: str, workspace: str | None = None, app: str | None = None) -> str
             raise RuntimeError('Invalid window identifier')
         dispatch(f'hl.dsp.focus({{window="address:{target["address"]}"}})')
         return 'Switched to ' + (target.get('class') or target.get('title'))
+    if op == 'close' and app:
+        # "close brave": that app's windows, not whatever happens to be in front
+        clients = json.loads(run(['hyprctl', '-j', 'clients']))
+        name = app.lower().replace(' ', '')
+        matches = [c for c in clients if c.get('mapped') and (name in c.get('class', '').lower().replace(' ', '')
+                                                               or name in c.get('initialClass', '').lower().replace(' ', ''))]
+        if not matches:
+            raise RuntimeError(f'No open window belongs to "{app}".')
+        for target in matches:
+            if not re.fullmatch(r'0x[0-9a-fA-F]+', target['address']):
+                raise RuntimeError('Invalid window identifier')
+            dispatch(f'hl.dsp.window.close({{ window = "address:{target["address"]}" }})')
+        label = matches[0].get('class') or app
+        return f'Closed {label}' + (f' ({len(matches)} windows)' if len(matches) > 1 else '')
+    if op == 'minimize':
+        raise RuntimeError('Hyprland has no minimize. Say "move this window to workspace 5" to put it out of the way.')
     active = active_window()
     if not active.get('address'):
         raise RuntimeError('No window is focused.')

@@ -9,7 +9,7 @@ const sameDestination=(actual,expected)=>{
 };
 export async function run(req, progress=()=>{}) {
   if(req.action==='cancel'){await chrome.storage.session.set({epoch:crypto.randomUUID()});return {message:'Cancelled'};}
-  if(req.action==='ping')return {message:'Brave connected',version:'phase14-v1'};
+  if(req.action==='ping')return {message:'Brave connected',version:'phase15-v1'};
   if(req.action==='active') {
     // Tab metadata only; no page script runs.
     const [current]=await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -172,6 +172,18 @@ export async function run(req, progress=()=>{}) {
       if(!tab||!/^https?:/.test(tab.url))throw Error('Focus a web page first.');
       const found=await flow.observe('Finding what the mouse is pointing at',()=>page({op:'pointer'}),1500);
       return confirmed('Pointing at '+found.name,'Control under the mouse observed',{...found,tabId:tab.id});
+    }
+    if(task.action==='switch_tab') {
+      // "switch to the youtube tab": the open tab whose title or site best matches the words.
+      const words=String(task.query||'').toLowerCase().split(/\s+/).filter(w=>w.length>1);
+      const all=await chrome.tabs.query({});
+      const score=t=>{const hay=((t.title||'')+' '+(()=>{try{return new URL(t.url).hostname.replace(/^www\./,'');}catch{return '';}})()).toLowerCase();
+        return words.filter(w=>hay.includes(w)).length/(words.length||1);};
+      const ranked=all.map(t=>[score(t),t]).filter(([s])=>s>0).sort((a,b)=>b[0]-a[0]||(b[1].active?1:0)-(a[1].active?1:0));
+      if(!ranked.length)throw Error('No open tab matches "'+task.query+'".');
+      const best=ranked[0][1];
+      await flow.act('Switching to '+(best.title||'the tab'),async()=>{await chrome.tabs.update(best.id,{active:true});await chrome.windows.update(best.windowId,{focused:true});});
+      return confirmed('Switched to '+(best.title||'the tab').slice(0,60),'Matching tab is active',{tabId:best.id,tab_id:best.id,url:best.url});
     }
     if(task.action==='game_text') {
       if(!tab||!/^https?:/.test(tab.url))return {found:false};
